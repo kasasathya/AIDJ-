@@ -2,7 +2,7 @@ myenv
 .env
 .cache
 __pycache__
-# songs
+songs
 # mix.mp3
 # analyzed_setlist.json
 # mixing_plan.json
