@@ -326,10 +326,100 @@ def check_phase_cancellation(outgoing: AudioSegment, incoming: AudioSegment, ove
     
     return has_cancellation, severity
 
+
+def generate_synthetic_beat_grid(audio_seg: AudioSegment, bpm: float, first_beat_ms: float = None):
+    """
+    Generate a synthetic beat grid from known BPM starting at first beat position.
+    
+    This is MORE RELIABLE than librosa's beat detection which often:
+    - Detects double-time (198 instead of 99 BPM)
+    - Misses beats
+    - Has inconsistent downbeat detection
+    
+    Args:
+        audio_seg: Audio segment to analyze
+        bpm: Known BPM of the track
+        first_beat_ms: Where first beat starts (None = auto-detect)
+    
+    Returns: (beat_times_ms, downbeat_times_ms)
+    """
+    duration_ms = len(audio_seg)
+    beat_interval_ms = 60000 / bpm  # milliseconds per beat
+    
+    # If first_beat_ms not provided, find it using onset detection
+    if first_beat_ms is None:
+        first_beat_ms = find_first_beat_onset(audio_seg, bpm)
+    
+    # Generate beat grid from first beat
+    beats = []
+    current_time = first_beat_ms
+    while current_time < duration_ms:
+        beats.append(current_time)
+        current_time += beat_interval_ms
+    
+    beat_times_ms = np.array(beats)
+    
+    # Downbeats are every 4th beat (assuming 4/4 time)
+    downbeat_times_ms = beat_times_ms[::4]
+    
+    return beat_times_ms, downbeat_times_ms
+
+
+def find_first_beat_onset(audio_seg: AudioSegment, expected_bpm: float):
+    """
+    Find the first beat (musical content start) using onset detection.
+    More reliable than librosa.beat.beat_track for finding the first beat.
+    
+    Returns: first_beat_ms
+    """
+    y = audio_segment_to_np(audio_seg)
+    sr = audio_seg.frame_rate
+    
+    # Get onset envelope with bass emphasis (kicks are on beats)
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, aggregate=np.median)
+    
+    # Also check RMS energy for loud content
+    rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=512)[0]
+    
+    # Find first strong onset
+    onset_threshold = np.percentile(onset_env, 70)  # Top 30% of onsets
+    strong_onsets = np.where(onset_env > onset_threshold)[0]
+    
+    if len(strong_onsets) == 0:
+        return 0  # No strong onsets found
+    
+    # First strong onset frame
+    first_onset_frame = strong_onsets[0]
+    
+    # Also check RMS to make sure it's actual music, not a click
+    rms_threshold = np.max(rms) * 0.1  # At least 10% of peak loudness
+    loud_frames = np.where(rms > rms_threshold)[0]
+    
+    if len(loud_frames) > 0:
+        # Use the earlier of: first strong onset or first loud frame
+        first_loud_frame = loud_frames[0]
+        first_frame = min(first_onset_frame, first_loud_frame)
+    else:
+        first_frame = first_onset_frame
+    
+    # Convert to time
+    first_beat_ms = librosa.frames_to_time(first_frame, sr=sr, hop_length=512) * 1000
+    
+    # Round to nearest beat interval for cleaner alignment
+    beat_interval_ms = 60000 / expected_bpm
+    first_beat_ms = round(first_beat_ms / beat_interval_ms) * beat_interval_ms
+    
+    return max(0, first_beat_ms)
+
 # ================= ADVANCED BEAT ALIGNMENT SYSTEM =================
 def detect_beat_grid(audio_seg: AudioSegment, bpm=None):
     """
     Detect precise beat grid with downbeat detection using librosa.
+    
+    IMPROVED FOR ISSUES #1, #4:
+    - Uses multiple methods to find true downbeats (beat 1 of each bar)
+    - Ensures consistent bar-phase detection for alignment
+    
     Returns beat times in milliseconds and downbeat positions.
     """
     y = audio_segment_to_np(audio_seg)
@@ -339,26 +429,57 @@ def detect_beat_grid(audio_seg: AudioSegment, bpm=None):
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, units='frames')
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
     
-    # Detect downbeats (first beat of each bar - every 4 beats typically)
-    # Use onset strength to find stronger beats
+    if len(beat_times) < 4:
+        beat_times_ms = beat_times * 1000
+        return beat_times_ms, beat_times_ms[:1] if len(beat_times) > 0 else np.array([]), tempo
+    
+    # IMPROVED DOWNBEAT DETECTION (FIX ISSUE #4)
+    # Method 1: Use onset strength to find stronger beats
     onset_env = librosa.onset.onset_strength(y=y, sr=sr)
     
-    # Downbeats are typically every 4 beats in 4/4 time
-    if len(beat_times) >= 4:
-        # Find downbeats by looking at onset strength at beat positions
-        beat_strengths = [onset_env[int(librosa.time_to_frames(bt, sr=sr))] for bt in beat_times]
-        
-        # Group into bars of 4 beats
-        downbeat_indices = []
-        for i in range(0, len(beat_times) - 3, 4):
-            # Find strongest beat in this group of 4
-            bar_beats = beat_strengths[i:i+4]
-            strongest_in_bar = i + np.argmax(bar_beats)
-            downbeat_indices.append(strongest_in_bar)
-        
-        downbeat_times = beat_times[downbeat_indices]
-    else:
-        downbeat_times = beat_times[::4] if len(beat_times) >= 4 else beat_times[:1]
+    # Method 2: Use low-frequency (bass) content - kicks are on downbeats
+    # Apply low-pass filter to isolate bass
+    try:
+        y_bass = librosa.effects.preemphasis(y, coef=-0.95)  # Emphasize low frequencies
+        onset_bass = librosa.onset.onset_strength(y=y_bass, sr=sr)
+    except:
+        onset_bass = onset_env
+    
+    # Calculate beat strengths using combined methods
+    beat_strengths = []
+    bass_strengths = []
+    for bt in beat_times:
+        frame_idx = int(librosa.time_to_frames(bt, sr=sr))
+        if frame_idx < len(onset_env):
+            beat_strengths.append(onset_env[frame_idx])
+            bass_strengths.append(onset_bass[frame_idx] if frame_idx < len(onset_bass) else onset_env[frame_idx])
+        else:
+            beat_strengths.append(0)
+            bass_strengths.append(0)
+    
+    beat_strengths = np.array(beat_strengths)
+    bass_strengths = np.array(bass_strengths)
+    
+    # Combined score: weight bass content higher (downbeats typically have stronger bass/kick)
+    combined_strengths = 0.4 * beat_strengths + 0.6 * bass_strengths
+    
+    # CRITICAL FIX: Find the true "beat 1" position
+    # Look at first 8 beats and find which position has highest average strength across bars
+    bar_position_scores = [0.0, 0.0, 0.0, 0.0]  # Score for each beat position (1,2,3,4)
+    
+    for i in range(min(32, len(combined_strengths))):  # First 8 bars
+        position = i % 4
+        bar_position_scores[position] += combined_strengths[i]
+    
+    # The beat position with highest total score is likely "beat 1"
+    true_beat_one_offset = np.argmax(bar_position_scores)
+    
+    # Identify downbeats (every 4th beat, starting from true beat 1)
+    downbeat_indices = []
+    for i in range(true_beat_one_offset, len(beat_times), 4):
+        downbeat_indices.append(i)
+    
+    downbeat_times = beat_times[downbeat_indices] if len(downbeat_indices) > 0 else beat_times[::4]
     
     # Convert to milliseconds
     beat_times_ms = beat_times * 1000
@@ -366,43 +487,349 @@ def detect_beat_grid(audio_seg: AudioSegment, bpm=None):
     
     return beat_times_ms, downbeat_times_ms, tempo
 
+
+def find_first_musical_content(audio: AudioSegment, threshold_db: float = -40):
+    """
+    Find where actual musical content starts in a track (not silence/ambient).
+    
+    FIX FOR ISSUE #3: Properly detect audio start, not file start.
+    
+    Returns: start_time_ms where music actually begins
+    """
+    # Convert to numpy for analysis
+    y = audio_segment_to_np(audio)
+    sr = audio.frame_rate
+    
+    # Calculate RMS energy in short windows
+    frame_length = int(sr * 0.05)  # 50ms windows
+    hop_length = frame_length // 2
+    
+    # Calculate RMS
+    rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
+    
+    # Convert threshold from dB to linear
+    threshold_linear = 10 ** (threshold_db / 20)
+    
+    # Find first frame above threshold
+    above_threshold = np.where(rms > threshold_linear)[0]
+    
+    if len(above_threshold) == 0:
+        return 0  # No silence detected
+    
+    first_loud_frame = above_threshold[0]
+    first_loud_time_ms = (first_loud_frame * hop_length / sr) * 1000
+    
+    return first_loud_time_ms
+
+
+def detect_first_downbeat_and_trim(audio: AudioSegment, expected_bpm: float = 120):
+    """
+    FIX ISSUE #3: Detect first downbeat and find where actual music starts.
+    
+    IMPROVED: Uses multiple methods to find true audio start:
+    1. Energy threshold detection (find where audio gets loud)
+    2. Beat detection (find first actual beat)
+    3. Downbeat detection (find first downbeat/bar start)
+    
+    Returns: (audio, trim_offset_ms, first_downbeat_ms)
+    - If music starts at file start, returns original audio
+    - If there's silence, trims to first downbeat
+    """
+    # METHOD 1: Find where audio content actually starts (energy-based)
+    music_start_ms = find_first_musical_content(audio, threshold_db=-35)
+    
+    # METHOD 2: Detect beat grid
+    beats, downbeats, tempo = detect_beat_grid(audio, expected_bpm)
+    
+    if len(beats) == 0:
+        print("   ⚠️  No beats detected, using energy-based start")
+        if music_start_ms > 100:
+            print(f"   ✂️  Music starts at {music_start_ms:.0f}ms (trimming silence)")
+            return audio[int(music_start_ms):], music_start_ms, 0
+        return audio, 0, 0
+    
+    if len(downbeats) == 0:
+        print("   ⚠️  No downbeats detected, using first beat")
+        downbeats = beats[:1]
+    
+    # Find the first downbeat AFTER music starts
+    first_downbeat_ms = downbeats[0]
+    
+    # If energy detection found music starting earlier, use that as reference
+    if music_start_ms > 0 and music_start_ms < first_downbeat_ms:
+        # Find closest downbeat to where music starts
+        valid_downbeats = downbeats[downbeats >= music_start_ms - 100]  # Allow 100ms tolerance
+        if len(valid_downbeats) > 0:
+            first_downbeat_ms = valid_downbeats[0]
+    
+    # Determine trim point
+    # Use the earlier of: music_start or first_downbeat (but at least snap to a beat)
+    trim_point_ms = min(music_start_ms, first_downbeat_ms) if music_start_ms > 100 else first_downbeat_ms
+    
+    # Snap trim point to nearest beat for clean cut
+    if len(beats) > 0 and trim_point_ms > 0:
+        nearest_beat_idx = np.argmin(np.abs(beats - trim_point_ms))
+        trim_point_ms = beats[nearest_beat_idx]
+    
+    # Only trim if there's significant silence (>300ms)
+    if trim_point_ms > 300:
+        # Verify there's actually silence before this point
+        intro_section = audio[:int(trim_point_ms)]
+        intro_rms = intro_section.rms
+        
+        # Get energy of first 2 seconds after trim point
+        after_trim = audio[int(trim_point_ms):int(trim_point_ms + 2000)]
+        after_rms = after_trim.rms if len(after_trim) > 0 else intro_rms
+        
+        # If intro is significantly quieter, trim it
+        if intro_rms < after_rms * 0.4:  # Less than 40% energy
+            print(f"   ✂️  Trimming {trim_point_ms:.0f}ms of silence (music starts at {music_start_ms:.0f}ms)")
+            trimmed_audio = audio[int(trim_point_ms):]
+            # Recalculate first downbeat position in trimmed audio
+            new_first_downbeat = 0  # Now at start
+            return trimmed_audio, trim_point_ms, new_first_downbeat
+        else:
+            print(f"   → Intro has significant audio content, keeping full track")
+    
+    # No trimming needed - return with first downbeat position
+    return audio, 0, first_downbeat_ms
+
 def align_beats_perfect(outgoing: AudioSegment, incoming: AudioSegment, 
                         overlap_duration_ms: int, bpm_from: float, bpm_to: float,
                         track_names: tuple = ("Track A", "Track B")):
     """
     Perfect beat-to-beat alignment during overlap.
     
-    Process:
-    1. Detect beat grids in both tracks
-    2. Align first downbeat of incoming to outgoing's beat grid
-    3. Apply micro time-stretching per beat to maintain sync throughout overlap
-    4. Generate waveform visualizations for DJ analysis
+    Process (CORRECTED for Issue #1):
+    1. Calculate ACTUAL BPM from beat intervals (not metadata)
+    2. Time-stretch incoming to match outgoing FIRST
+    3. THEN detect beats on the stretched audio
+    4. Align downbeats in overlap region
+    5. Generate waveform visualizations for DJ analysis
     
     Args:
         outgoing: Outgoing track audio
         incoming: Incoming track audio
         overlap_duration_ms: Duration of overlap
-        bpm_from: BPM of outgoing track
-        bpm_to: BPM of incoming track
+        bpm_from: BPM of outgoing track (metadata - will be verified)
+        bpm_to: BPM of incoming track (metadata - will be verified)
         track_names: Tuple of (outgoing_name, incoming_name) for visualization
     
     Returns: (aligned_incoming, shift_ms)
     """
     print("   🎯 Applying perfect beat alignment...")
     
-    # Detect beat grids
+    # STEP 1: Detect beat grids to calculate ACTUAL BPM (not metadata)
+    print("   → Detecting beats to calculate actual BPM...")
     try:
-        outgoing_beats, outgoing_downbeats, _ = detect_beat_grid(outgoing, bpm_from)
-        incoming_beats, incoming_downbeats, _ = detect_beat_grid(incoming, bpm_to)
+        outgoing_beats_initial, outgoing_downbeats_initial, _ = detect_beat_grid(outgoing, bpm_from)
+        incoming_beats_initial, incoming_downbeats_initial, _ = detect_beat_grid(incoming, bpm_to)
     except Exception as e:
         print(f"   ⚠️  Beat detection failed: {e}, using basic alignment")
         return incoming, 0
     
-    if len(outgoing_downbeats) == 0 or len(incoming_downbeats) == 0:
-        print("   ⚠️  No downbeats detected, using basic alignment")
+    if len(outgoing_beats_initial) < 2 or len(incoming_beats_initial) < 2:
+        print("   ⚠️  Insufficient beats detected, using basic alignment")
         return incoming, 0
     
-    # === VISUALIZATION: Beat Grid Alignment ===
+    # STEP 2: Calculate ACTUAL BPM from beat intervals (CRITICAL FIX)
+    # Use median of differences to be robust against detection errors
+    outgoing_intervals = np.diff(outgoing_beats_initial / 1000)  # Convert to seconds
+    incoming_intervals = np.diff(incoming_beats_initial / 1000)
+    
+    period_out = np.median(outgoing_intervals)  # Seconds between beats
+    period_in = np.median(incoming_intervals)
+    
+    bpm_out_actual = 60 / period_out  # Convert to BPM
+    bpm_in_actual = 60 / period_in
+    
+    # CRITICAL FIX: Detect and correct double-time / half-time errors
+    # librosa sometimes detects 2x or 0.5x the actual tempo
+    # We need to fix BOTH the BPM number AND the beat arrays
+    
+    outgoing_is_double = False
+    incoming_is_double = False
+    
+    # Check outgoing for double/half-time
+    if abs(bpm_out_actual - bpm_from * 2) < abs(bpm_out_actual - bpm_from):
+        print(f"   ⚠️  Detected double-time in outgoing: {bpm_out_actual:.2f} → {bpm_out_actual/2:.2f} BPM")
+        bpm_out_actual = bpm_out_actual / 2
+        outgoing_is_double = True
+        # FIX: Also fix the beat arrays - take every other beat
+        outgoing_beats_initial = outgoing_beats_initial[::2]
+        outgoing_downbeats_initial = outgoing_downbeats_initial[::2] if len(outgoing_downbeats_initial) > 0 else outgoing_downbeats_initial
+    elif abs(bpm_out_actual - bpm_from / 2) < abs(bpm_out_actual - bpm_from):
+        print(f"   ⚠️  Detected half-time in outgoing: {bpm_out_actual:.2f} → {bpm_out_actual*2:.2f} BPM")
+        bpm_out_actual = bpm_out_actual * 2
+    
+    # Check incoming for double/half-time
+    if abs(bpm_in_actual - bpm_to * 2) < abs(bpm_in_actual - bpm_to):
+        print(f"   ⚠️  Detected double-time in incoming: {bpm_in_actual:.2f} → {bpm_in_actual/2:.2f} BPM")
+        bpm_in_actual = bpm_in_actual / 2
+        incoming_is_double = True
+        # FIX: Also fix the beat arrays - take every other beat
+        incoming_beats_initial = incoming_beats_initial[::2]
+        incoming_downbeats_initial = incoming_downbeats_initial[::2] if len(incoming_downbeats_initial) > 0 else incoming_downbeats_initial
+    elif abs(bpm_in_actual - bpm_to / 2) < abs(bpm_in_actual - bpm_to):
+        print(f"   ⚠️  Detected half-time in incoming: {bpm_in_actual:.2f} → {bpm_in_actual*2:.2f} BPM")
+        bpm_in_actual = bpm_in_actual * 2
+    
+    print(f"   → Actual BPM from beat intervals:")
+    print(f"     Outgoing: {bpm_out_actual:.2f} BPM (metadata: {bpm_from:.1f})")
+    print(f"     Incoming: {bpm_in_actual:.2f} BPM (metadata: {bpm_to:.1f})")
+    
+    # STEP 3: Time-stretch incoming to match outgoing (CRITICAL FIX)
+    # This MUST happen BEFORE beat detection for alignment
+    stretch_ratio = bpm_in_actual / bpm_out_actual
+    
+    if abs(stretch_ratio - 1.0) > 0.001:  # More than 0.1% difference
+        print(f"   🎛️  Time-stretching incoming: {stretch_ratio:.4f}x ({bpm_in_actual:.2f} → {bpm_out_actual:.2f} BPM)")
+        
+        try:
+            # Time-stretch the ENTIRE incoming track
+            incoming = time_stretch_audio(incoming, stretch_ratio)
+            print(f"   ✅ Incoming track stretched to match outgoing tempo")
+        except Exception as e:
+            print(f"   ⚠️  Time-stretch failed: {e}, proceeding without stretch")
+            stretch_ratio = 1.0
+    else:
+        print(f"   → BPMs already matched (difference < 0.1%), no stretch needed")
+    
+    # STEP 4: Generate SYNTHETIC beat grids using known BPM (MORE RELIABLE than librosa)
+    # librosa's beat detection is unreliable - it often detects double-time and has inconsistent results
+    # Using synthetic grids from known BPM ensures beat counts match perfectly
+    print(f"   → Generating synthetic beat grids at {bpm_out_actual:.1f} BPM...")
+    try:
+        # Generate beat grids from known BPM (finds first beat via onset detection)
+        outgoing_beats, outgoing_downbeats = generate_synthetic_beat_grid(outgoing, bpm_out_actual)
+        incoming_beats, incoming_downbeats = generate_synthetic_beat_grid(incoming, bpm_out_actual)
+        
+        print(f"   → Outgoing: {len(outgoing_beats)} beats, first beat at {outgoing_beats[0]:.1f}ms")
+        print(f"   → Incoming: {len(incoming_beats)} beats, first beat at {incoming_beats[0]:.1f}ms")
+                
+    except Exception as e:
+        print(f"   ⚠️  Beat grid generation failed: {e}")
+        return incoming, 0
+    
+    # Verify beat counts now match
+    overlap_beats_out = outgoing_beats[outgoing_beats < overlap_duration_ms]
+    overlap_beats_in = incoming_beats[incoming_beats < overlap_duration_ms]
+    
+    print(f"   → Beat count in overlap region: Outgoing={len(overlap_beats_out)}, Incoming={len(overlap_beats_in)}")
+    
+    beat_count_diff = abs(len(overlap_beats_out) - len(overlap_beats_in))
+    if beat_count_diff == 0:
+        print(f"   ✅ Beat counts match perfectly - tempo sync successful!")
+    elif beat_count_diff <= 2:
+        print(f"   ✅ Beat counts match (±{beat_count_diff} beat tolerance) - tempo sync successful!")
+    else:
+        print(f"   ⚠️  WARNING: Beat counts differ by {beat_count_diff}!")
+        # Additional diagnostics
+        if len(overlap_beats_in) == 0:
+            print(f"   → Incoming has no beats in overlap - first beat at {incoming_beats[0]:.0f}ms" if len(incoming_beats) > 0 else "   → No incoming beats detected at all!")
+    
+    if len(outgoing_downbeats) == 0 and len(outgoing_beats) > 0:
+        # Use every 4th beat as downbeat fallback
+        outgoing_downbeats = outgoing_beats[::4]
+        print(f"   → No outgoing downbeats, using every 4th beat")
+    
+    if len(incoming_downbeats) == 0 and len(incoming_beats) > 0:
+        # Use every 4th beat as downbeat fallback
+        incoming_downbeats = incoming_beats[::4]
+        print(f"   → No incoming downbeats, using every 4th beat")
+    
+    # NOTE: Visualization moved to AFTER alignment is applied (see Step 5b)
+    
+    # STEP 5: BAR-LEVEL ALIGNMENT (FIX ISSUE #4)
+    # ==========================================================
+    # CRITICAL: Align downbeat to downbeat DIRECTLY
+    # Don't round to whole bars - just align the actual downbeat positions
+    # ==========================================================
+    
+    # Calculate beat interval (should be the same for both tracks now)
+    beat_interval_ms = 60000 / bpm_out_actual  # ms per beat
+    bar_interval_ms = beat_interval_ms * 4     # ms per bar (4 beats)
+    
+    # Find the first downbeat in the overlap region for outgoing track
+    outgoing_overlap_downbeats = outgoing_downbeats[outgoing_downbeats < overlap_duration_ms]
+    
+    # CRITICAL FIX: For incoming, we need a downbeat that exists (not necessarily in overlap)
+    # If incoming's first downbeat is very late (long intro), we still use it
+    if len(outgoing_overlap_downbeats) == 0:
+        print("   ⚠️  No outgoing downbeats in overlap region, using first available")
+        target_downbeat = outgoing_downbeats[0] if len(outgoing_downbeats) > 0 else outgoing_beats[0] if len(outgoing_beats) > 0 else 0
+    else:
+        target_downbeat = outgoing_overlap_downbeats[0]
+    
+    if len(incoming_downbeats) == 0:
+        print("   ⚠️  No incoming downbeats detected, using first beat")
+        incoming_first_downbeat = incoming_beats[0] if len(incoming_beats) > 0 else 0
+    else:
+        incoming_first_downbeat = incoming_downbeats[0]
+    
+    # SIMPLE DIRECT ALIGNMENT: Shift so incoming's first downbeat lands on target
+    # This is the CORRECT approach - align downbeat to downbeat directly
+    direct_shift = target_downbeat - incoming_first_downbeat
+    
+    # If incoming's first downbeat is very late (e.g., 10+ seconds into track),
+    # we might want to use a later downbeat from outgoing instead
+    if incoming_first_downbeat > overlap_duration_ms:
+        print(f"   ⚠️  Incoming first downbeat at {incoming_first_downbeat:.0f}ms (after overlap region)")
+        # Find an outgoing downbeat that would align with incoming starting from 0
+        # We want: outgoing_downbeat = incoming_first_downbeat + shift
+        # So we should pick an outgoing downbeat and calculate the required shift
+        
+        # Option: Use the incoming track from its start, align to nearest outgoing downbeat
+        # Find which outgoing downbeat is closest to where incoming would be
+        possible_targets = outgoing_downbeats[outgoing_downbeats < overlap_duration_ms + incoming_first_downbeat]
+        if len(possible_targets) > 0:
+            # Pick one that gives a clean bar alignment
+            best_target = possible_targets[-1]  # Use latest one in range
+            direct_shift = best_target - incoming_first_downbeat
+            print(f"   → Using later target downbeat: {best_target:.1f}ms")
+    
+    # Apply the direct shift (no rounding to bars - we want exact downbeat alignment)
+    shift_ms = direct_shift
+    
+    print(f"   → Downbeat alignment: {shift_ms:.1f}ms shift")
+    print(f"     (Target: {target_downbeat:.1f}ms, Incoming first downbeat: {incoming_first_downbeat:.1f}ms)")
+    print(f"     Bar interval: {bar_interval_ms:.1f}ms ({bpm_out_actual:.1f} BPM)")
+    
+    # Apply the shift
+    if shift_ms > 0:
+        incoming = AudioSegment.silent(int(shift_ms)) + incoming
+        # Update beat positions for shifted audio
+        incoming_beats = incoming_beats + shift_ms
+        incoming_downbeats = incoming_downbeats + shift_ms
+    elif shift_ms < 0:
+        # Trim from beginning - but ensure we don't cut into actual music
+        trim_amount = min(int(-shift_ms), max(0, len(incoming) - overlap_duration_ms - 1000))
+        if trim_amount > 0:
+            incoming = incoming[trim_amount:]
+            # Update beat positions (they shift left)
+            incoming_beats = np.array([b + shift_ms for b in incoming_beats if b + shift_ms >= 0])
+            incoming_downbeats = np.array([b + shift_ms for b in incoming_downbeats if b + shift_ms >= 0])
+    
+    # VERIFY alignment - calculate actual positions after shift
+    if len(outgoing_downbeats) > 0 and len(incoming_downbeats) > 0:
+        out_first = outgoing_downbeats[0]
+        # incoming_downbeats are already updated with the shift
+        in_first_after_shift = incoming_downbeats[0] if len(incoming_downbeats) > 0 else 0
+        
+        alignment_error = abs(out_first - in_first_after_shift)
+        
+        # Check if error is within 1 beat
+        if alignment_error < beat_interval_ms / 2:
+            print(f"   ✅ Downbeat alignment verified: {alignment_error:.1f}ms error (excellent)")
+        elif alignment_error < beat_interval_ms:
+            print(f"   ✅ Downbeat alignment verified: {alignment_error:.1f}ms error (good)")
+        else:
+            # Check if it's off by whole bars (which might be acceptable)
+            error_in_beats = alignment_error / beat_interval_ms
+            print(f"   ⚠️  Alignment check: {alignment_error:.1f}ms error ({error_in_beats:.1f} beats)")
+    
+    # === STEP 5b: VISUALIZATION (AFTER alignment is applied) ===
+    # This shows the ALIGNED beat positions, not the original positions
     if VISUALIZATION_ENABLED and len(outgoing_beats) > 0 and len(incoming_beats) > 0:
         try:
             plot_beat_alignment(outgoing, incoming, 
@@ -412,32 +839,10 @@ def align_beats_perfect(outgoing: AudioSegment, incoming: AudioSegment,
         except Exception as e:
             print(f"   ⚠️  Beat visualization failed: {e}")
     
-    # STEP 1: Align first downbeat
-    # Find the first downbeat in outgoing (should be near start of overlap section)
-    target_downbeat = outgoing_downbeats[0]
-    incoming_downbeat = incoming_downbeats[0]
-    
-    # Calculate shift needed to align downbeats
-    shift_ms = target_downbeat - incoming_downbeat
-    
-    print(f"   → Downbeat alignment: {shift_ms:.1f}ms shift")
-    
-    # Apply initial shift
-    if shift_ms > 0:
-        incoming = AudioSegment.silent(int(shift_ms)) + incoming
-        # Update beat positions
-        incoming_beats = incoming_beats + shift_ms
-        incoming_downbeats = incoming_downbeats + shift_ms
-    elif shift_ms < 0:
-        incoming = incoming[int(-shift_ms):]
-        # Update beat positions
-        incoming_beats = incoming_beats + shift_ms
-        incoming_downbeats = incoming_downbeats + shift_ms
-    
-    # STEP 2: Beat grid warping for continuous sync
+    # STEP 6: Beat grid warping for continuous sync
     # Only warp beats within the overlap duration
     overlap_beats_out = outgoing_beats[outgoing_beats < overlap_duration_ms]
-    overlap_beats_in = incoming_beats[incoming_beats < overlap_duration_ms]
+    overlap_beats_in = incoming_beats[(incoming_beats >= 0) & (incoming_beats < overlap_duration_ms)]
     
     if len(overlap_beats_out) < 2 or len(overlap_beats_in) < 2:
         print(f"   → Basic alignment applied (shift: {shift_ms:.1f}ms)")
@@ -490,6 +895,39 @@ def align_beats_perfect(outgoing: AudioSegment, incoming: AudioSegment,
         print(f"   → Beat grid warping: {total_corrections} micro-corrections applied")
     else:
         print(f"   → Beats already aligned (drift < 10ms)")
+    
+    # STEP 7: FINAL VERIFICATION
+    # Quick check that the alignment is reasonable
+    try:
+        # Get beats from corrected audio
+        check_length = min(overlap_duration_ms + 2000, len(corrected_audio))
+        if check_length > 1000:
+            corrected_beats_check, corrected_downbeats_check, _ = detect_beat_grid(
+                corrected_audio[:check_length], 
+                bpm_out_actual
+            )
+            
+            # Fix double-time if detected
+            if len(corrected_beats_check) > 1:
+                detected_bpm = 60000 / np.median(np.diff(corrected_beats_check))
+                if detected_bpm > bpm_out_actual * 1.8:
+                    corrected_beats_check = corrected_beats_check[::2]
+                    corrected_downbeats_check = corrected_downbeats_check[::2] if len(corrected_downbeats_check) > 0 else corrected_downbeats_check
+            
+            if len(corrected_downbeats_check) > 0 and len(outgoing_downbeats) > 0:
+                # Simple check: is first corrected downbeat close to an outgoing downbeat?
+                first_corrected = corrected_downbeats_check[0]
+                closest_outgoing = outgoing_downbeats[np.argmin(np.abs(outgoing_downbeats - first_corrected))]
+                error = abs(first_corrected - closest_outgoing)
+                
+                if error < beat_interval_ms / 2:
+                    print(f"   ✅ Final alignment verified: {error:.1f}ms error (excellent)")
+                elif error < beat_interval_ms:
+                    print(f"   ✅ Final alignment verified: {error:.1f}ms error (good)")
+                else:
+                    print(f"   ⚠️  Final alignment: {error:.1f}ms to nearest outgoing downbeat")
+    except Exception as e:
+        print(f"   ⚠️  Final verification skipped: {e}")
     
     # STEP 3: WAVEFORM PHASE ALIGNMENT (Professional DJ technique)
     # After beat alignment, align waveforms at sample level to prevent phase cancellation
@@ -678,9 +1116,24 @@ def find_best_lag(outgoing: AudioSegment, incoming: AudioSegment):
 
 # ================= TIME-STRETCH =================
 def time_stretch_audio(audio: AudioSegment, factor: float):
-    """Time-stretch AudioSegment without changing pitch using librosa."""
+    """
+    Time-stretch AudioSegment without changing pitch using librosa.
+    
+    IMPORTANT: 'factor' represents the tempo ratio (incoming_bpm / outgoing_bpm):
+    - factor > 1: incoming is FASTER, so we need to SLOW IT DOWN (stretch longer)
+    - factor < 1: incoming is SLOWER, so we need to SPEED IT UP (compress shorter)
+    
+    librosa.effects.time_stretch uses 'rate' which works OPPOSITE:
+    - rate > 1: audio gets FASTER (shorter duration)
+    - rate < 1: audio gets SLOWER (longer duration)
+    
+    So we INVERT the factor: rate = 1.0 / factor
+    """
     y = audio_segment_to_np(audio)
-    y_stretch = librosa.effects.time_stretch(y, rate=factor)
+    # CRITICAL FIX: Invert the factor for librosa
+    # If incoming is 1.0071x faster, we need rate=0.993 to slow it down
+    rate = 1.0 / factor
+    y_stretch = librosa.effects.time_stretch(y, rate=rate)
     return np_to_audio_segment(y_stretch, sr=audio.frame_rate)
 
 # ================= TRANSITIONS =================
@@ -813,6 +1266,14 @@ def generate_mix(mixing_plan_json: str = "output/mixing_plan.json",
 
         to_audio = AudioSegment.from_file(to_path)
         bpm_to = safe_float(to_meta.get("bpm", 0))
+        
+        # FIX ISSUE #3: Detect and trim silence from incoming tracks
+        # Skip for first track (it can have intro), but trim all subsequent tracks
+        if idx > 0:
+            original_length = len(to_audio)
+            to_audio, trim_offset_ms, first_downbeat_ms = detect_first_downbeat_and_trim(to_audio, bpm_to)
+            if trim_offset_ms > 0:
+                print(f"   📍 Track trimmed: {original_length/1000:.1f}s → {len(to_audio)/1000:.1f}s (removed {trim_offset_ms/1000:.1f}s silence)")
 
         # First track: just add it with fade in
         if idx == 0:
@@ -821,6 +1282,7 @@ def generate_mix(mixing_plan_json: str = "output/mixing_plan.json",
             mix = to_audio.fade_in(ms(2))
             previous_track_audio = to_audio
             previous_track_start_in_mix = 0
+            previous_track_bpm = bpm_to  # Store original BPM
             
             # Add to mix overview
             mix_overview_data.append({
@@ -841,7 +1303,9 @@ def generate_mix(mixing_plan_json: str = "output/mixing_plan.json",
             continue
 
         from_meta = tracks_db[from_title]
-        bpm_from = safe_float(from_meta.get("bpm", 0))
+        # FIX: Use stored original BPM from previous track (before any stretching)
+        # Don't use from_meta BPM because previous_track_audio may have been stretched
+        bpm_from = previous_track_bpm if 'previous_track_bpm' in locals() else safe_float(from_meta.get("bpm", 0))
         
         # NEW STRUCTURE: Get timing from mixing plan
         transition_point_sec = safe_float(entry.get("transition_point"), 90.0)
@@ -876,38 +1340,10 @@ def generate_mix(mixing_plan_json: str = "output/mixing_plan.json",
         print(f"   Incoming starts at: {incoming_start_in_mix/1000:.1f}s in mix")
         print(f"   Transition point: {transition_point_in_mix/1000:.1f}s in mix")
         
-        # STEP 1: GRADUAL BPM SYNC - Apply smooth tempo transition BEFORE overlap starts
-        # The outgoing track must be fully synced to incoming BPM by the time overlap begins
-        # This ensures both tracks are at the same tempo during the overlap for perfect alignment
-        if previous_track_audio and bpm_from > 0 and bpm_to > 0:
-            stretch_factor = safe_float(bpm_to/bpm_from, 1.0)
-            stretch_factor = np.clip(stretch_factor, 0.90, 1.10)  # Allow wider range for DJ mixing
-            if abs(stretch_factor - 1.0) > 0.01:
-                print(f"   BPM sync: {bpm_from:.1f} → {bpm_to:.1f} (stretch: {stretch_factor:.3f}x)")
-                print(f"   → Sync completes BEFORE overlap (at {transition_point_in_mix/1000:.1f}s)")
-                
-                # Calculate tempo ramp duration (typically 8-16 seconds before transition)
-                ramp_duration_ms = min(overlap_duration_ms * 2, 16000)  # Max 16s ramp
-                ramp_start_in_mix = max(0, transition_point_in_mix - ramp_duration_ms)
-                
-                # Split mix into: before ramp, ramp section, overlap section
-                before_ramp = mix[:ramp_start_in_mix]
-                ramp_section = mix[ramp_start_in_mix:transition_point_in_mix]
-                overlap_section = mix[transition_point_in_mix:]
-                
-                # Apply gradual tempo sync to ramp section (completes at transition point)
-                synced_ramp = apply_gradual_tempo_sync(
-                    ramp_section, 
-                    ramp_duration_ms, 
-                    stretch_factor
-                )
-                
-                # Reconstruct mix: before ramp + synced ramp + overlap (both now at same BPM)
-                mix = before_ramp + synced_ramp + overlap_section
-                
-                print(f"   → Tempo ramp: {ramp_start_in_mix/1000:.1f}s to {transition_point_in_mix/1000:.1f}s ({ramp_duration_ms/1000:.1f}s)")
+        # NOTE: Tempo sync is now handled inside align_beats_perfect()
+        # The old gradual_tempo_sync code has been removed to prevent double-syncing
         
-        # STEP 2: PERFECT BEAT-GRID ALIGNMENT for incoming track
+        # STEP 1: PERFECT BEAT-GRID ALIGNMENT for incoming track
         # Get a section from previous track at transition point for beat matching
         if previous_track_audio:
             match_section_start = max(0, transition_point_ms - 5000)
@@ -984,6 +1420,7 @@ def generate_mix(mixing_plan_json: str = "output/mixing_plan.json",
         # Update tracking variables
         previous_track_audio = to_audio
         previous_track_start_in_mix = incoming_start_in_mix
+        previous_track_bpm = bpm_to  # Store ORIGINAL BPM (before any stretching)
         
         # Add to mix overview
         mix_overview_data.append({

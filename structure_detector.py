@@ -228,6 +228,58 @@ def snap_to_phrase_boundary(target_time, phrase_boundaries, direction="nearest")
     return float(snapped_time)
 
 
+def snap_to_bar_boundary(target_time, beats, beats_per_bar=4):
+    """
+    FIX FOR ISSUE #2: Snap timestamp to nearest BAR boundary (not just beat).
+    
+    Professional DJs always transition on bar boundaries (beat 1 of a bar),
+    not in the middle of a bar.
+    
+    Args:
+        target_time: Desired time in seconds
+        beats: Array of beat times in seconds
+        beats_per_bar: Number of beats per bar (usually 4 for 4/4 time)
+    
+    Returns:
+        Time snapped to nearest bar boundary (downbeat)
+    """
+    if len(beats) < beats_per_bar:
+        return target_time
+    
+    # Calculate bar boundaries (every 4th beat = downbeat)
+    bar_boundaries = beats[::beats_per_bar]
+    
+    if len(bar_boundaries) == 0:
+        return target_time
+    
+    # Find nearest bar boundary
+    idx = np.argmin(np.abs(bar_boundaries - target_time))
+    snapped_time = bar_boundaries[idx]
+    
+    if abs(snapped_time - target_time) > 0.5:
+        print(f"  → Quantized {target_time:.2f}s to bar boundary at {snapped_time:.2f}s")
+    
+    return float(snapped_time)
+
+
+def snap_to_beat(target_time, beats):
+    """
+    Snap timestamp to nearest beat (for fine-grained alignment).
+    
+    Args:
+        target_time: Desired time in seconds
+        beats: Array of beat times in seconds
+    
+    Returns:
+        Time snapped to nearest beat
+    """
+    if len(beats) == 0:
+        return target_time
+    
+    idx = np.argmin(np.abs(beats - target_time))
+    return float(beats[idx])
+
+
 def ask_gpt4o_for_transition_point_fast(segments, beats_str, title, artist, duration):
     """
     Ask GPT to detect transition point and check for vocals in first 8 seconds.
@@ -236,6 +288,7 @@ def ask_gpt4o_for_transition_point_fast(segments, beats_str, title, artist, dura
     # Format segments with timestamps
     lyrics_formatted = []
     has_early_vocals = False
+    first_meaningful_audio_time = None
     
     for seg in segments[:20]:  # Only first 20 segments (~first 2 minutes)
         start = seg.get("start", 0)
@@ -245,6 +298,14 @@ def ask_gpt4o_for_transition_point_fast(segments, beats_str, title, artist, dura
         # Check if there are vocals in first 8 seconds
         if start < 8.0 and text and len(text) > 10:  # Meaningful lyrics
             has_early_vocals = True
+        
+        # Find FIRST meaningful audio (not silence/noise)
+        if first_meaningful_audio_time is None and text and len(text) > 5:
+            first_meaningful_audio_time = start
+    
+    # If no meaningful audio found, default to 0.5s (avoid complete silence)
+    if first_meaningful_audio_time is None:
+        first_meaningful_audio_time = 0.5
     
     lyrics_text = "\n".join(lyrics_formatted)
     
@@ -275,13 +336,13 @@ For EACH candidate:
 
 ALSO PROVIDE:
 - has_vocals_in_first_8s: Are there vocals in first 8 seconds?
-- intro_duration_sec: Time before main vocals start (0-20s)
+- intro_duration_sec: Time when AUDIBLE MUSIC starts (NOT silence). This is when a DJ should START playing this track. Find where drums/bass/melody BEGIN (0-20s). Default: 0.5s if music starts immediately.
 - recommended_transition: Which of the 3 candidates is best?
 
 Return JSON:
 {{
   "has_vocals_in_first_8s": <boolean>,
-  "intro_duration_sec": <float 0-20>,
+  "intro_duration_sec": <float 0-20>,  // When audible music STARTS (not silence)
   "transition_candidates": [
     {{
       "time": <float 50-120>,
@@ -307,6 +368,12 @@ Return JSON:
     # Add Python-detected early vocals as backup
     if "has_vocals_in_first_8s" not in result:
         result["has_vocals_in_first_8s"] = has_early_vocals
+    
+    # CRITICAL FIX: Ensure intro_duration reflects actual audio start
+    if "intro_duration_sec" not in result or result["intro_duration_sec"] < 0.3:
+        # Use detected audio start time, with minimum of 0.5s
+        result["intro_duration_sec"] = max(first_meaningful_audio_time, 0.5)
+        print(f"  → Corrected intro_duration to {result['intro_duration_sec']:.2f}s (actual audio start)")
     
     # Ensure we have transition candidates
     if "transition_candidates" not in result:
@@ -370,27 +437,45 @@ def analyze_structure_fast(title, artist, filename, bpm, SONGS_DIR="./songs"):
         energy_data = analyze_energy_curve(file_path, max_duration=120)
         result["energy_analysis"] = energy_data
         
-        transition_point = float(result.get("transition_point_sec", 70.0))
+        transition_point = float(result.get("transition_point_sec", result.get("recommended_transition", 70.0)))
         intro_duration = float(result.get("intro_duration_sec", 8.0))
         has_vocals_in_first_8s = result.get("has_vocals_in_first_8s", False)
         transition_is_line_end = result.get("transition_is_line_end", True)
         
-        # Step 4: PHRASE-BASED ALIGNMENT (Professional DJ timing)
-        if len(phrase_boundaries) > 0:
-            # Snap transition to nearest phrase boundary (every 8 bars)
-            transition_point = snap_to_phrase_boundary(transition_point, phrase_boundaries, direction="nearest")
+        # ==========================================================
+        # FIX ISSUE #2: MUSICAL QUANTIZATION OF ALL TIMESTAMPS
+        # ==========================================================
+        # All timestamps MUST be snapped to musical boundaries:
+        # - Transitions: snap to BAR boundaries (every 4 beats / downbeats)
+        # - Intro points: snap to beats at minimum
+        # ==========================================================
+        
+        if len(beats) > 0:
+            # STEP 1: Snap transition point to BAR boundary (most important!)
+            # Professional DJs ALWAYS transition on beat 1 of a bar
+            original_transition = transition_point
+            transition_point = snap_to_bar_boundary(transition_point, beats, beats_per_bar=4)
             
-            # Snap intro end to phrase boundary if close
-            intro_duration = snap_to_phrase_boundary(intro_duration, phrase_boundaries, direction="nearest")
-        elif len(beats) > 0:
-            # Fallback: at least align to beats
-            transition_candidates = beats[(beats >= transition_point - 5) & (beats <= transition_point + 5)]
-            if len(transition_candidates) > 0:
-                transition_point = float(transition_candidates[np.argmin(np.abs(transition_candidates - transition_point))])
+            # If phrase boundaries exist, prefer those (every 8 bars = 32 beats)
+            if len(phrase_boundaries) > 0:
+                phrase_snapped = snap_to_phrase_boundary(transition_point, phrase_boundaries, direction="nearest")
+                # Use phrase boundary if it's within 4 seconds of bar-snapped time
+                if abs(phrase_snapped - transition_point) < 4.0:
+                    transition_point = phrase_snapped
             
-            intro_candidates = beats[(beats >= intro_duration - 2) & (beats <= intro_duration + 2)]
-            if len(intro_candidates) > 0:
-                intro_duration = float(intro_candidates[np.argmin(np.abs(intro_candidates - intro_duration))])
+            # STEP 2: Snap intro duration to beat boundary
+            # This ensures incoming track enters on a beat
+            intro_duration = snap_to_beat(intro_duration, beats)
+            
+            # STEP 3: Quantize ALL transition candidates in the result
+            if "transition_candidates" in result:
+                for candidate in result["transition_candidates"]:
+                    if "time" in candidate:
+                        candidate["time"] = snap_to_bar_boundary(candidate["time"], beats, beats_per_bar=4)
+            
+            print(f"  ✓ Quantized transition: {original_transition:.1f}s → {transition_point:.1f}s (bar-aligned)")
+        else:
+            print(f"  ⚠️  No beats detected - timestamps not quantized!")
         
         # Step 5: Enforce constraints
         transition_point = float(np.clip(transition_point, 50.0, min(120.0, duration - 10.0)))
