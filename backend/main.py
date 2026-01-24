@@ -1,0 +1,100 @@
+"""
+FastAPI Backend for AI DJ Mixing System
+========================================
+
+Main entry point providing:
+- REST API for song management and mix generation
+- WebSocket for real-time pipeline progress
+- Static file serving for audio files
+"""
+
+import os
+import sys
+from pathlib import Path
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+# Add parent directory to path for importing existing modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from backend.routers import songs, mix
+from backend.services.websocket_manager import manager
+
+# Paths
+BASE_DIR = Path(__file__).parent.parent
+SONGS_DIR = BASE_DIR / "songs"
+OUTPUT_DIR = BASE_DIR / "output"
+NOTES_DIR = BASE_DIR / "notes"
+
+# Ensure directories exist
+SONGS_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(exist_ok=True)
+NOTES_DIR.mkdir(exist_ok=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan events"""
+    print("🎧 AI DJ Mixing System Backend Starting...")
+    print(f"   Songs directory: {SONGS_DIR}")
+    print(f"   Output directory: {OUTPUT_DIR}")
+    yield
+    print("🎧 AI DJ Mixing System Backend Shutting Down...")
+
+
+# Create FastAPI app
+app = FastAPI(
+    title="AI DJ Mixing System API",
+    description="Professional AI-powered DJ mixing pipeline with real-time progress tracking",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# CORS configuration for Next.js frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # Next.js dev server
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static directories for serving audio files
+app.mount("/static/songs", StaticFiles(directory=str(SONGS_DIR)), name="songs")
+app.mount("/static/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output")
+
+# Include routers
+app.include_router(songs.router, prefix="/api/songs", tags=["Songs"])
+app.include_router(mix.router, prefix="/api/mix", tags=["Mix Generation"])
+
+
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {
+        "status": "online",
+        "service": "AI DJ Mixing System",
+        "version": "1.0.0"
+    }
+
+
+@app.get("/api/health")
+async def health_check():
+    """Detailed health check"""
+    songs_count = len(list(SONGS_DIR.glob("*.mp3")))
+    return {
+        "status": "healthy",
+        "songs_available": songs_count,
+        "output_ready": (OUTPUT_DIR / "mix.mp3").exists()
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

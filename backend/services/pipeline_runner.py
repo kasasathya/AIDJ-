@@ -1,0 +1,267 @@
+"""
+Pipeline Runner Service
+=======================
+
+Wraps the existing run_pipeline.py as an async task
+with progress tracking and WebSocket updates.
+"""
+
+import asyncio
+import uuid
+import sys
+import logging
+import traceback
+from pathlib import Path
+from typing import Dict, Optional, Callable
+from datetime import datetime
+from enum import Enum
+
+# Add parent directory for importing existing modules
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from backend.services.websocket_manager import manager
+
+
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
+    COMPLETE = "complete"
+    FAILED = "failed"
+
+
+class PipelineStage:
+    """Pipeline stage information"""
+    def __init__(self, number: int, name: str, description: str):
+        self.number = number
+        self.name = name
+        self.description = description
+
+
+# Define pipeline stages
+PIPELINE_STAGES = [
+    PipelineStage(1, "Song Selection", "Selecting songs based on user request"),
+    PipelineStage(2, "BPM Analysis", "Analyzing BPM and metadata"),
+    PipelineStage(3, "Structure Detection", "Detecting transition points and vocals"),
+    PipelineStage(4, "Mix Planning", "Generating professional mixing plan"),
+    PipelineStage(5, "Mix Generation", "Creating final audio mix"),
+]
+
+
+class MixJob:
+    """Represents a mix generation job"""
+    def __init__(self, job_id: str, prompt: str):
+        self.job_id = job_id
+        self.prompt = prompt
+        self.status = JobStatus.PENDING
+        self.current_stage = 0
+        self.progress_percent = 0
+        self.logs: list = []
+        self.error: Optional[str] = None
+        self.mix_url: Optional[str] = None
+        self.created_at = datetime.now()
+        self.completed_at: Optional[datetime] = None
+        self.is_paused = False
+        self.is_cancelled = False
+    
+    def to_dict(self) -> dict:
+        return {
+            "job_id": self.job_id,
+            "prompt": self.prompt,
+            "status": self.status.value,
+            "current_stage": self.current_stage,
+            "progress_percent": self.progress_percent,
+            "logs": self.logs[-20:],  # Last 20 logs
+            "error": self.error,
+            "mix_url": self.mix_url,
+            "is_paused": self.is_paused,
+            "is_cancelled": self.is_cancelled,
+            "created_at": self.created_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None
+        }
+
+
+# Global job store
+jobs: Dict[str, MixJob] = {}
+
+
+class PipelineRunner:
+    """Runs the DJ mixing pipeline with progress tracking"""
+    
+    def __init__(self, job: MixJob):
+        self.job = job
+        self.base_dir = Path(__file__).parent.parent.parent
+    
+    async def log(self, message: str, level: str = "info"):
+        """Log message and broadcast via WebSocket"""
+        self.job.logs.append({"message": message, "level": level, "time": datetime.now().isoformat()})
+        await manager.send_log(self.job.job_id, message, level)
+        print(f"[{self.job.job_id}] {level.upper()}: {message}")
+    
+    async def update_stage(self, stage_num: int, status: str = "running"):
+        """Update current stage and broadcast"""
+        self.job.current_stage = stage_num
+        stage = PIPELINE_STAGES[stage_num - 1]
+        await manager.send_stage_update(self.job.job_id, stage_num, stage.name, status)
+        
+        # Update progress percent based on stage
+        if status == "running":
+            self.job.progress_percent = (stage_num - 1) * 20
+        elif status == "complete":
+            self.job.progress_percent = stage_num * 20
+        
+        await manager.send_progress(self.job.job_id, self.job.progress_percent, stage_num)
+    
+    async def run(self) -> bool:
+        """Execute the full pipeline"""
+        import os
+        
+        # Import existing pipeline modules
+        try:
+            from track_analysis_openai_approach import combined_engine
+            from bpm_lookup import process_bpm_lookup
+            from structure_detector import process_structure_detection
+            from generate_mixing_plan import generate_mixing_plan
+            from mixing_engine import generate_mix
+        except ImportError as e:
+            await self.log(f"Failed to import pipeline modules: {e}", "error")
+            return False
+        
+        output_dir = self.base_dir / "output"
+        
+        try:
+            self.job.status = JobStatus.RUNNING
+            
+            # Stage 1: Song Selection
+            await self.update_stage(1, "running")
+            await self.log("Starting song selection based on your request...")
+            
+            await asyncio.to_thread(
+                combined_engine,
+                self.job.prompt,
+                output_path=str(output_dir / "analyzed_setlist.json")
+            )
+            await self.update_stage(1, "complete")
+            await self.log("Song selection complete ✓")
+            
+            # Stage 2: BPM Analysis
+            await self.update_stage(2, "running")
+            await self.log("Analyzing BPM and metadata...")
+            
+            await asyncio.to_thread(
+                process_bpm_lookup,
+                str(output_dir / "analyzed_setlist.json"),
+                str(output_dir / "basic_setlist.json")
+            )
+            await self.update_stage(2, "complete")
+            await self.log("BPM analysis complete ✓")
+            
+            # Stage 3: Structure Detection
+            await self.update_stage(3, "running")
+            await self.log("Detecting song structures and transition points...")
+            
+            await asyncio.to_thread(
+                process_structure_detection,
+                str(output_dir / "basic_setlist.json"),
+                str(output_dir / "structure_data.json")
+            )
+            await self.update_stage(3, "complete")
+            await self.log("Structure detection complete ✓")
+            
+            # Stage 4: Mix Planning
+            await self.update_stage(4, "running")
+            await self.log("Generating professional mixing plan...")
+            
+            await asyncio.to_thread(
+                generate_mixing_plan,
+                basic_setlist_path=str(output_dir / "basic_setlist.json"),
+                structure_json_path=str(output_dir / "structure_data.json"),
+                output_path=str(output_dir / "mixing_plan.json")
+            )
+            await self.update_stage(4, "complete")
+            await self.log("Mixing plan ready ✓")
+            
+            # Stage 5: Final Mix Generation
+            await self.update_stage(5, "running")
+            await self.log("Creating final audio mix... This may take a few minutes.")
+            
+            await asyncio.to_thread(
+                generate_mix,
+                mixing_plan_json=str(output_dir / "mixing_plan.json"),
+                structure_json=str(output_dir / "structure_data.json"),
+                output_path=str(output_dir / "mix.mp3")
+            )
+            await self.update_stage(5, "complete")
+            await self.log("Mix generation complete! 🎧")
+            
+            # Complete
+            self.job.status = JobStatus.COMPLETE
+            self.job.mix_url = "/static/output/mix.mp3"
+            self.job.completed_at = datetime.now()
+            self.job.progress_percent = 100
+            
+            await manager.send_complete(self.job.job_id, self.job.mix_url)
+            return True
+            
+        except Exception as e:
+            error_msg = f"Pipeline failed: {str(e)}"
+            await self.log(error_msg, "error")
+            await self.log(traceback.format_exc(), "error")
+            
+            self.job.status = JobStatus.FAILED
+            self.job.error = error_msg
+            self.job.completed_at = datetime.now()
+            
+            await manager.send_error(self.job.job_id, error_msg)
+            return False
+
+
+def create_job(prompt: str) -> MixJob:
+    """Create a new mix generation job"""
+    job_id = str(uuid.uuid4())[:8]
+    job = MixJob(job_id, prompt)
+    jobs[job_id] = job
+    return job
+
+
+def get_job(job_id: str) -> Optional[MixJob]:
+    """Get job by ID"""
+    return jobs.get(job_id)
+
+
+def pause_job(job_id: str) -> bool:
+    """Pause a running job"""
+    job = jobs.get(job_id)
+    if job and job.status == JobStatus.RUNNING:
+        job.is_paused = True
+        job.status = JobStatus.PAUSED
+        return True
+    return False
+
+
+def resume_job(job_id: str) -> bool:
+    """Resume a paused job"""
+    job = jobs.get(job_id)
+    if job and job.status == JobStatus.PAUSED:
+        job.is_paused = False
+        job.status = JobStatus.RUNNING
+        return True
+    return False
+
+
+def cancel_job(job_id: str) -> bool:
+    """Cancel a running or paused job"""
+    job = jobs.get(job_id)
+    if job and job.status in [JobStatus.RUNNING, JobStatus.PAUSED, JobStatus.PENDING]:
+        job.is_cancelled = True
+        job.status = JobStatus.CANCELLED
+        job.completed_at = datetime.now()
+        return True
+    return False
+
+
+async def run_pipeline_job(job: MixJob):
+    """Run pipeline in background"""
+    runner = PipelineRunner(job)
+    await runner.run()

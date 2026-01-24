@@ -1,12 +1,40 @@
+# Python
 myenv
+myvenv
+backend_venv/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
 .env
+.env.local
+
+# Node
+node_modules/
+.next/
+.turbo/
+
+# Project specific
 .cache
-__pycache__
 songs/
 extra/
 output/
 notes/
-# mix.mp3
-# analyzed_setlist.json
-# mixing_plan.json
+logo/
+
+# Build artifacts
+*.mp3
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
 AI DJ Brief.pdf
+.DS_Store
+Thumbs.db
