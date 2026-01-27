@@ -918,13 +918,14 @@ export default function HomePage() {
                 onDownload={handleDownload}
                 onReorder={handleReorder}
                 onPlay={(song) => handlePlaySong({
-                  id: song.id,
-                  title: song.name,
-                  artist: '',
-                  bpm: song.bpm,
-                  musicalKey: song.key,
-                  duration: 0,
-                })}
+  id: 'mix.mp3',
+  name: finalTitle,
+  bpm: 120,
+  key: 'C',
+  file: new File([], 'mix.mp3'),
+  duration: 0,
+  isGenerated: true,
+});
               />
             </div>
 
@@ -1312,13 +1313,15 @@ export default function HomePage() {
               onDownload={handleDownload}
               onReorder={handleReorder}
               onPlay={(song) => handlePlaySong({
-                id: song.id,
-                title: song.name,
-                artist: '',
-                bpm: song.bpm,
-                musicalKey: song.key,
-                duration: song.duration || 0,
-              })}
+  id: 'mix.mp3',
+  name: finalTitle,
+  bpm: 120,
+  key: 'C',
+  file: new File([], 'mix.mp3'),
+  duration: 0,
+  isGenerated: true,
+});
+
             />
             <Disclaimer />
           </div>
