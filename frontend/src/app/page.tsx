@@ -172,14 +172,14 @@ export default function HomePage() {
         setTimeout(() => {
    setTimeout(() => {
   handlePlaySong({
-    id: 'mix.mp3',
-    name: finalTitle,              // ✅ correct
-    bpm: 120,
-    key: 'C',                      // ✅ correct
-    file: new File([], 'mix.mp3'), // ✅ required
-    isGenerated: true,
-    duration: 0,
-  });
+  id: 'mix.mp3',
+  name: finalTitle,
+  bpm: 120,
+  key: 'C',
+  file: new File([], 'mix.mp3'),
+  isGenerated: true,
+  duration: 0,
+});
 }, 500);
       } else if (message.type === 'error') {
         console.error('Mix generation failed:', message.message);
