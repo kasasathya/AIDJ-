@@ -170,15 +170,16 @@ export default function HomePage() {
 
         // Auto-play the remix in GlobalMusicPlayer
         setTimeout(() => {
-          handlePlaySong({
-            id: 'mix.mp3',
-            title: finalTitle,
-            artist: 'AI DJ',
-            bpm: 120,
-            musicalKey: 'C',
-            duration: 0,
-            isGenerated: true,
-          });
+         handlePlaySong({
+  id: 'mix.mp3',
+  name: finalTitle,          // ✅ matches interface
+  bpm: 120,
+  key: 'C',                  // ✅ matches interface
+  file: new File([], 'mix.mp3'), // ✅ required field
+  duration: 0,
+  isGenerated: true,
+});
+
         }, 500);
       } else if (message.type === 'error') {
         console.error('Mix generation failed:', message.message);
