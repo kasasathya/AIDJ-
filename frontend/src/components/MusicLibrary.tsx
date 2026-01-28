@@ -470,6 +470,10 @@ export function MusicLibrary({
                     alignItems: 'center',
                     justifyContent: 'center',
                 }}
+                onClick={() => {
+                    const input = document.getElementById('file-input') as HTMLInputElement;
+                    if (input) input.click();
+                }}
             >
                 <input
                     type="file"
@@ -479,10 +483,13 @@ export function MusicLibrary({
                     style={{ display: 'none' }}
                     id="file-input"
                 />
-                <label
-                    htmlFor="file-input"
+                <div
                     style={{
-                        cursor: 'pointer',
+                        width: '100%',
+                        height: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
                         fontSize: isMobile ? '14px' : '13px',
                         fontWeight: '600',
                         color: isAddMediaHovered ? 'var(--accent)' : 'var(--gray-100)',
@@ -490,7 +497,7 @@ export function MusicLibrary({
                     }}
                 >
                     + Add Media
-                </label>
+                </div>
             </div>
         </div>
     );

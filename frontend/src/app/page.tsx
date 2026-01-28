@@ -210,7 +210,12 @@ export default function HomePage() {
 
   // File upload
   async function handleFileUpload(files: FileList | null) {
-    if (!files) return;
+    if (!files || files.length === 0) {
+      console.log('No files selected');
+      return;
+    }
+
+    console.log(`Uploading ${files.length} file(s) to ${API_BASE_URL}/api/songs/upload`);
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -218,6 +223,8 @@ export default function HomePage() {
       formData.append('file', file);
 
       try {
+        console.log(`Uploading file ${i + 1}/${files.length}: ${file.name}`);
+        
         const response = await fetch(`${API_BASE_URL}/api/songs/upload`, {
           method: 'POST',
           body: formData,
@@ -225,18 +232,50 @@ export default function HomePage() {
 
         if (response.ok) {
           const data = await response.json();
+          console.log('Upload successful:', data);
+          
           const newSong: Song = {
-            id: data.filename, // Use actual filename for audio URL
+            id: data.filename,
             name: data.metadata.title,
             bpm: data.metadata.bpm || 0,
             key: data.metadata.key || 'Unknown',
             file,
           };
           setSongs((prev) => [...prev, newSong]);
+          
+          // Show success message
+          alert(`✅ Successfully uploaded: ${file.name}`);
+        } else {
+          const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+          console.error('Upload failed:', response.status, errorData);
+          alert(`❌ Upload failed for ${file.name}: ${errorData.detail || response.statusText}`);
         }
       } catch (error) {
-        console.error('Upload failed:', error);
+        console.error('Upload error:', error);
+        alert(`❌ Network error uploading ${file.name}: ${error}`);
       }
+    }
+
+    // Reload song list after all uploads complete
+    console.log('Reloading song list...');
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/songs`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.songs && Array.isArray(data.songs)) {
+          const loadedSongs: Song[] = data.songs.map((song: any) => ({
+            id: song.filename,
+            name: song.title || song.filename,
+            bpm: song.bpm || 0,
+            key: song.key || 'Unknown',
+            file: new File([], song.filename),
+          }));
+          setSongs(loadedSongs);
+          console.log('Song list reloaded:', loadedSongs.length, 'songs');
+        }
+      }
+    } catch (error) {
+      console.error('Failed to reload songs:', error);
     }
   }
 
