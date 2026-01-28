@@ -1,0 +1,4 @@
+# Vercel build cache
+.next
+.turbo
+node_modules
