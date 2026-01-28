@@ -19,6 +19,10 @@ import { PlaylistConfirmation } from '@/components/PlaylistConfirmation';
 import { SoundStrings, getBlendedGradient } from '@/components/SoundStrings';
 import { Disclaimer } from '@/components/Disclaimer';
 
+// API Configuration - uses environment variable in production
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const WS_BASE_URL = API_BASE_URL.replace('http://', 'ws://').replace('https://', 'wss://');
+
 interface Song {
   id: string;
   name: string;
@@ -133,7 +137,7 @@ export default function HomePage() {
   useEffect(() => {
     if (!currentJobId) return;
 
-    const wsUrl = `ws://localhost:8000/api/mix/ws/${currentJobId}`;
+    const wsUrl = `${WS_BASE_URL}/api/mix/ws/${currentJobId}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onmessage = (event) => {
@@ -214,7 +218,7 @@ export default function HomePage() {
       formData.append('file', file);
 
       try {
-        const response = await fetch('http://localhost:8000/api/songs/upload', {
+        const response = await fetch(`${API_BASE_URL}/api/songs/upload`, {
           method: 'POST',
           body: formData,
         });
@@ -239,7 +243,7 @@ export default function HomePage() {
   // Delete song
   async function handleDelete(filename: string) {
     try {
-      const response = await fetch(`http://localhost:8000/api/songs/${filename}`, {
+      const response = await fetch(`${API_BASE_URL}/api/songs/${filename}`, {
         method: 'DELETE',
       });
 
@@ -271,7 +275,7 @@ export default function HomePage() {
 
     try {
       const response = await fetch(
-        `http://localhost:8000/api/songs/${encodeURIComponent(filename)}/rename?new_name=${encodeURIComponent(newName)}`,
+        `${API_BASE_URL}/api/songs/${encodeURIComponent(filename)}/rename?new_name=${encodeURIComponent(newName)}`,
         { method: 'PUT' }
       );
 
@@ -326,8 +330,8 @@ export default function HomePage() {
 
     // Create audio URL - check if it's a generated remix or regular song
     const audioUrl = song.isGenerated
-      ? `http://localhost:8000/static/output/mix.mp3`
-      : `http://localhost:8000/static/songs/${encodeURIComponent(song.id)}`;
+      ? `${API_BASE_URL}/static/output/mix.mp3`
+      : `${API_BASE_URL}/static/songs/${encodeURIComponent(song.id)}`;
 
     // Create or update audio element
     if (audioRef.current) {
@@ -441,8 +445,8 @@ export default function HomePage() {
       const isGenerated = song?.isGenerated || filename === 'mix.mp3';
 
       const url = isGenerated
-        ? `http://localhost:8000/static/output/mix.mp3`
-        : `http://localhost:8000/static/songs/${encodeURIComponent(filename)}`;
+        ? `${API_BASE_URL}/static/output/mix.mp3`
+        : `${API_BASE_URL}/static/songs/${encodeURIComponent(filename)}`;
 
       const response = await fetch(url);
       if (response.ok) {
@@ -470,7 +474,7 @@ export default function HomePage() {
   useEffect(() => {
     async function loadSongs() {
       try {
-        const response = await fetch('http://localhost:8000/api/songs');
+        const response = await fetch(`${API_BASE_URL}/api/songs`);
         const data = await response.json();
 
         const loadedSongs: Song[] = data.songs.map((song: any) => ({
@@ -515,7 +519,7 @@ export default function HomePage() {
     setWorkflowState('mixing');
 
     try {
-      const response = await fetch('http://localhost:8000/api/mix/generate', {
+      const response = await fetch(`${API_BASE_URL}/api/mix/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt }),
@@ -578,7 +582,7 @@ export default function HomePage() {
     setStages((prev) => prev.map((s) => ({ ...s, status: 'pending' })));
 
     try {
-      const response = await fetch('http://localhost:8000/api/mix/generate', {
+      const response = await fetch(`${API_BASE_URL}/api/mix/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt }),
@@ -644,7 +648,7 @@ export default function HomePage() {
     if (!currentJobId) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/api/mix/pause/${currentJobId}`, {
+      const response = await fetch(`${API_BASE_URL}/api/mix/pause/${currentJobId}`, {
         method: 'POST',
       });
 
@@ -661,7 +665,7 @@ export default function HomePage() {
     if (!currentJobId) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/api/mix/resume/${currentJobId}`, {
+      const response = await fetch(`${API_BASE_URL}/api/mix/resume/${currentJobId}`, {
         method: 'POST',
       });
 
@@ -680,7 +684,7 @@ export default function HomePage() {
     if (!confirm('Are you sure you want to cancel the mix generation?')) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/api/mix/cancel/${currentJobId}`, {
+      const response = await fetch(`${API_BASE_URL}/api/mix/cancel/${currentJobId}`, {
         method: 'POST',
       });
 
