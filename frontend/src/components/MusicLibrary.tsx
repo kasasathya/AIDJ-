@@ -392,7 +392,9 @@ export function MusicLibrary({
 
                                 {/* Three-dot menu - ALWAYS VISIBLE, HOVER TO SHOW MENU */}
                                 <button
-                                    ref={(el) => menuButtonRefs.current[index] = el}
+                                    ref={(el) => {
+                                        if (el) menuButtonRefs.current[index] = el;
+                                    }}
                                     onMouseEnter={(e) => handleMenuHover(index, e.currentTarget)}
                                     onClick={(e) => e.stopPropagation()}
                                     style={{

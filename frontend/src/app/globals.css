@@ -19,12 +19,29 @@ body {
 :root {
   --mobile-breakpoint: 768px;
   --tablet-breakpoint: 1024px;
+  
+  /* Mobile-optimized spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 20px;
+  
+  /* Compact font sizes for mobile */
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-base: 14px;
+  --font-md: 15px;
+  --font-lg: 16px;
+  --font-xl: 18px;
+  --font-2xl: 20px;
 }
 
 /* Responsive container adjustments */
 @media (max-width: 768px) {
   body {
     -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
   }
 
   /* Larger touch targets */
@@ -32,11 +49,34 @@ body {
   .clickable {
     min-height: 44px;
     min-width: 44px;
+    padding: 10px 14px;
   }
 
   /* Better text sizing for mobile */
   html {
     font-size: 14px;
+  }
+  
+  /* Compact layouts */
+  .compact-mobile {
+    padding: var(--spacing-md) !important;
+    gap: var(--spacing-sm) !important;
+  }
+  
+  /* Stack elements on mobile */
+  .mobile-stack {
+    flex-direction: column !important;
+  }
+  
+  /* Hide decorative elements on mobile */
+  .mobile-hide {
+    display: none !important;
+  }
+  
+  /* Reduce shadows and effects for performance */
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
   }
 }
 
@@ -44,19 +84,70 @@ body {
   html {
     font-size: 13px;
   }
+  
+  /* Extra compact for small phones */
+  button,
+  .clickable {
+    padding: 8px 12px;
+    font-size: var(--font-sm);
+  }
 }
 
 /* Safe area for notched phones */
 @supports (padding: max(0px)) {
+  .safe-area-top {
+    padding-top: max(20px, env(safe-area-inset-top));
+  }
+  
   .safe-area-bottom {
     padding-bottom: max(20px, env(safe-area-inset-bottom));
   }
+  
+  .safe-area-left {
+    padding-left: max(10px, env(safe-area-inset-left));
+  }
+  
+  .safe-area-right {
+    padding-right: max(10px, env(safe-area-inset-right));
+  }
 }
 
-/* Hide scrollbars on mobile for cleaner look but allow scrolling */
+/* Smooth scrolling on mobile */
 @media (max-width: 768px) {
+  * {
+    scroll-behavior: smooth;
+  }
+  
+  /* Hide scrollbars on mobile for cleaner look but allow scrolling */
   ::-webkit-scrollbar {
-    width: 0;
-    height: 0;
+    width: 2px;
+    height: 2px;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+  }
+}
+
+/* Landscape phone optimization */
+@media (max-height: 500px) and (orientation: landscape) {
+  .mobile-hide-landscape {
+    display: none !important;
+  }
+  
+  body {
+    font-size: 12px;
+  }
+}
+
+/* Reduce motion for better mobile performance */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

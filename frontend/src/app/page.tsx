@@ -475,11 +475,25 @@ export default function HomePage() {
     async function loadSongs() {
       try {
         const response = await fetch(`${API_BASE_URL}/api/songs`);
+        
+        if (!response.ok) {
+          console.error('Failed to fetch songs:', response.status);
+          setSongs([]);
+          return;
+        }
+        
         const data = await response.json();
+
+        // Safety check - ensure data.songs exists and is an array
+        if (!data || !data.songs || !Array.isArray(data.songs)) {
+          console.error('Invalid songs response:', data);
+          setSongs([]);
+          return;
+        }
 
         const loadedSongs: Song[] = data.songs.map((song: any) => ({
           id: song.filename,
-          name: song.title,
+          name: song.title || song.filename,
           bpm: song.bpm || 0,
           key: song.key || 'Unknown',
           file: new File([], song.filename),
@@ -488,6 +502,7 @@ export default function HomePage() {
         setSongs(loadedSongs);
       } catch (error) {
         console.error('Failed to load songs:', error);
+        setSongs([]); // Set empty array on error
       }
     }
 

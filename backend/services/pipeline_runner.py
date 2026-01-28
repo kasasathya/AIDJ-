@@ -7,6 +7,7 @@ with progress tracking and WebSocket updates.
 """
 
 import asyncio
+import os
 import uuid
 import sys
 import logging
@@ -91,7 +92,26 @@ class PipelineRunner:
     
     def __init__(self, job: MixJob):
         self.job = job
-        self.base_dir = Path(__file__).parent.parent.parent
+        # Detect base directory - use current working directory approach
+        # This works both locally and on Render
+        cwd = Path.cwd()
+        
+        # Check if we're running from backend directory or project root
+        if (cwd / 'songs').exists():
+            self.base_dir = cwd
+        elif (cwd.parent / 'songs').exists():
+            self.base_dir = cwd.parent
+        elif os.environ.get('RENDER'):
+            # Fallback for Render
+            self.base_dir = Path('/opt/render/project/src')
+        else:
+            # Default fallback
+            self.base_dir = Path(__file__).parent.parent.parent
+        
+        # Create directories immediately
+        (self.base_dir / 'output').mkdir(parents=True, exist_ok=True)
+        (self.base_dir / 'songs').mkdir(parents=True, exist_ok=True)
+        (self.base_dir / 'notes').mkdir(parents=True, exist_ok=True)
     
     async def log(self, message: str, level: str = "info"):
         """Log message and broadcast via WebSocket"""
@@ -115,7 +135,6 @@ class PipelineRunner:
     
     async def run(self) -> bool:
         """Execute the full pipeline"""
-        import os
         
         # Import existing pipeline modules
         try:
@@ -129,6 +148,17 @@ class PipelineRunner:
             return False
         
         output_dir = self.base_dir / "output"
+        songs_dir = self.base_dir / "songs"
+        notes_dir = self.base_dir / "notes"
+        
+        # Ensure all required directories exist with explicit creation
+        for dir_path in [output_dir, songs_dir, notes_dir]:
+            dir_path.mkdir(parents=True, exist_ok=True)
+            await self.log(f"Directory {dir_path}: exists={dir_path.exists()}")
+        
+        await self.log(f"Base directory: {self.base_dir}")
+        await self.log(f"Output directory: {output_dir}")
+        await self.log(f"Songs directory: {songs_dir}")
         
         try:
             self.job.status = JobStatus.RUNNING

@@ -23,7 +23,7 @@ interface UseWebSocketOptions {
 export function useWebSocket(options: UseWebSocketOptions) {
     const { jobId, onMessage, onStageUpdate, onLog, onProgress, onComplete, onError } = options;
     const wsRef = useRef<WebSocket | null>(null);
-    const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
+    const reconnectTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
     const connect = useCallback(() => {
         if (!jobId) return;

@@ -23,24 +23,48 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from backend.routers import songs, mix
 from backend.services.websocket_manager import manager
 
-# Paths
-BASE_DIR = Path(__file__).parent.parent
+# Paths - detect base directory properly for both local and Render
+import os
+cwd = Path.cwd()
+if os.environ.get('RENDER'):
+    # On Render, use the project src directory
+    BASE_DIR = Path('/opt/render/project/src')
+elif (cwd / 'songs').exists():
+    BASE_DIR = cwd
+elif (cwd.parent / 'songs').exists():
+    BASE_DIR = cwd.parent
+else:
+    BASE_DIR = Path(__file__).parent.parent
+
 SONGS_DIR = BASE_DIR / "songs"
 OUTPUT_DIR = BASE_DIR / "output"
 NOTES_DIR = BASE_DIR / "notes"
 
-# Ensure directories exist
-SONGS_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
-NOTES_DIR.mkdir(exist_ok=True)
+# Ensure directories exist with parents=True for Render deployment
+SONGS_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+NOTES_DIR.mkdir(parents=True, exist_ok=True)
+
+# Create placeholder files if needed
+(OUTPUT_DIR / ".gitkeep").touch(exist_ok=True)
+(SONGS_DIR / ".gitkeep").touch(exist_ok=True)
+
+print(f"[STARTUP] BASE_DIR: {BASE_DIR}")
+print(f"[STARTUP] SONGS_DIR: {SONGS_DIR} (exists: {SONGS_DIR.exists()})")
+print(f"[STARTUP] OUTPUT_DIR: {OUTPUT_DIR} (exists: {OUTPUT_DIR.exists()})")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
+    # Re-ensure directories exist at startup
+    SONGS_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    NOTES_DIR.mkdir(parents=True, exist_ok=True)
+    
     print("🎧 AI DJ Mixing System Backend Starting...")
-    print(f"   Songs directory: {SONGS_DIR}")
-    print(f"   Output directory: {OUTPUT_DIR}")
+    print(f"   Songs directory: {SONGS_DIR} (exists: {SONGS_DIR.exists()})")
+    print(f"   Output directory: {OUTPUT_DIR} (exists: {OUTPUT_DIR.exists()})")
     yield
     print("🎧 AI DJ Mixing System Backend Shutting Down...")
 

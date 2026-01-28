@@ -12,15 +12,15 @@ interface NavigationProps {
 
 export function Navigation({ activeTab, onTabChange, isMobile = false }: NavigationProps) {
     const tabs = [
-        { id: 'remix' as const, label: 'Studio', icon: '🎵' },
-        { id: 'library' as const, label: 'Collection', icon: '📚' },
-        { id: 'profile' as const, label: 'Profile', icon: '👤' },
+        { id: 'remix' as const, label: 'Studio', shortLabel: 'Mix' },
+        { id: 'library' as const, label: 'Collection', shortLabel: 'Lib' },
+        { id: 'profile' as const, label: 'Profile', shortLabel: 'Me' },
     ];
 
     return (
         <div style={{
             display: 'flex',
-            gap: isMobile ? '4px' : '8px',
+            gap: isMobile ? '6px' : '8px',
             marginLeft: 'auto',
             alignItems: 'center',
         }}>
@@ -29,7 +29,7 @@ export function Navigation({ activeTab, onTabChange, isMobile = false }: Navigat
                     key={tab.id}
                     onClick={() => onTabChange(tab.id)}
                     style={{
-                        padding: isMobile ? '8px 12px' : '10px 24px',
+                        padding: isMobile ? '6px 10px' : '10px 24px',
                         background: activeTab === tab.id
                             ? 'var(--accent-bg)'
                             : 'transparent',
@@ -38,14 +38,15 @@ export function Navigation({ activeTab, onTabChange, isMobile = false }: Navigat
                             : '1px solid transparent',
                         borderRadius: isMobile ? '8px' : '10px',
                         color: activeTab === tab.id ? 'var(--accent)' : 'var(--gray-300)',
-                        fontSize: isMobile ? '12px' : '14px',
+                        fontSize: isMobile ? '11px' : '14px',
                         fontWeight: activeTab === tab.id ? '600' : '500',
                         cursor: 'pointer',
                         transition: 'all 0.2s ease',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '6px',
-                        minHeight: '40px',
+                        gap: isMobile ? '4px' : '6px',
+                        minHeight: isMobile ? '36px' : '40px',
+                        whiteSpace: 'nowrap',
                     }}
                     onMouseEnter={(e) => {
                         if (activeTab !== tab.id) {
@@ -60,9 +61,11 @@ export function Navigation({ activeTab, onTabChange, isMobile = false }: Navigat
                         }
                     }}
                 >
-                    {isMobile && <span>{tab.icon}</span>}
-                    {!isMobile && tab.label}
-                    {isMobile && activeTab === tab.id && <span>{tab.label}</span>}
+                    {isMobile ? (
+                        activeTab === tab.id ? tab.label : tab.shortLabel
+                    ) : (
+                        tab.label
+                    )}
                 </button>
             ))}
         </div>
