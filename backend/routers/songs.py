@@ -285,15 +285,29 @@ async def rename_song(filename: str, new_name: str):
 
 @router.delete("/{filename}")
 async def delete_song(filename: str):
-    """Delete a song"""
+    """Delete a song from both local storage and Supabase"""
+    from backend.services.supabase_storage import delete_file
+    
     filepath = SONGS_DIR / filename
     
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail=f"Song not found: {filename}")
+    # Track errors but don't fail if one deletion fails
+    errors = []
     
     try:
-        # Delete song file
-        filepath.unlink()
+        # Delete from Supabase Storage
+        result = delete_file(filename)
+        if not result.get("success"):
+            errors.append(f"Supabase: {result.get('error')}")
+        else:
+            print(f"✅ Deleted from Supabase: {filename}")
+    except Exception as e:
+        errors.append(f"Supabase: {str(e)}")
+    
+    try:
+        # Delete local file if exists
+        if filepath.exists():
+            filepath.unlink()
+            print(f"✅ Deleted locally: {filename}")
         
         # Delete cached metadata if exists
         cache_name = Path(filename).stem.replace(" ", "_").lower()
@@ -302,6 +316,11 @@ async def delete_song(filename: str):
             if cache_path.exists():
                 cache_path.unlink()
         
-        return {"success": True, "message": f"Deleted {filename}"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+        errors.append(f"Local: {str(e)}")
+    
+    # Return success if at least Supabase deletion worked (local is ephemeral anyway)
+    if "Supabase:" not in str(errors) or not errors:
+        return {"success": True, "message": f"Deleted {filename}"}
+    else:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {'; '.join(errors)}")
