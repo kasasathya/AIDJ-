@@ -147,6 +147,33 @@ async def upload_audio(file: UploadFile = File(...)):
             detail=f"Upload failed: {error_message}"
         )
     
+    # ALSO save to local /songs folder for mix generation
+    # This allows the pipeline to access files for processing
+    try:
+        from pathlib import Path
+        import os
+        
+        # Get base directory
+        BASE_DIR = Path(__file__).parent.parent.parent
+        if os.environ.get('RENDER'):
+            BASE_DIR = Path('/opt/render/project/src')
+        
+        SONGS_DIR = BASE_DIR / "songs"
+        SONGS_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Save file locally
+        local_path = SONGS_DIR / file.filename
+        with open(local_path, 'wb') as f:
+            f.write(file_data)
+        
+        print(f"✅ Also saved locally: {local_path}")
+    except Exception as e:
+        print(f"⚠️ Failed to save locally (mix generation may not work): {e}")
+        # Don't fail the request - Supabase upload succeeded
+            status_code=500,
+            detail=f"Upload failed: {error_message}"
+        )
+    
     return UploadResponse(
         success=True,
         url=result["url"],
