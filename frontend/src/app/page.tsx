@@ -31,6 +31,7 @@ interface Song {
   file: File;
   isGenerated?: boolean;
   duration?: number;
+  url?: string;  // Public URL from Supabase Storage
 }
 
 interface PipelineStage {
@@ -208,56 +209,63 @@ export default function HomePage() {
     return () => ws.close();
   }, [currentJobId]);
 
-  // File upload
+
+  // File upload - Upload to Supabase Storage via Backend API
+  // ARCHITECTURE: Frontend → Backend (Render) → Supabase Storage
+  // This keeps Supabase credentials secure on the backend
   async function handleFileUpload(files: FileList | null) {
     if (!files || files.length === 0) {
       console.log('No files selected');
       return;
     }
 
-    console.log(`Uploading ${files.length} file(s) to ${API_BASE_URL}/api/songs/upload`);
+    console.log(`Uploading ${files.length} file(s) to Supabase Storage via backend`);
+
+    // Dynamic import to avoid SSR issues
+    const { uploadToSupabase, validateFile } = await import('@/lib/supabaseUpload');
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const formData = new FormData();
-      formData.append('file', file);
 
       try {
-        console.log(`Uploading file ${i + 1}/${files.length}: ${file.name}`);
-        
-        const response = await fetch(`${API_BASE_URL}/api/songs/upload`, {
-          method: 'POST',
-          body: formData,
+        console.log(`[${i + 1}/${files.length}] Processing: ${file.name}`);
+
+        // Validate file (50MB max for Supabase)
+        const validation = validateFile(file, 50, ['audio/mpeg', 'audio/mp3']);
+        if (!validation.valid) {
+          alert(`❌ ${file.name}: ${validation.error}`);
+          continue;
+        }
+
+        // Upload to Supabase Storage via backend
+        console.log('📤 Uploading to Supabase Storage...');
+        const uploadResult = await uploadToSupabase(file, (progress) => {
+          console.log(`Upload progress: ${progress.percentage.toFixed(1)}%`);
+          // TODO: Show progress UI (future enhancement)
         });
 
-        if (response.ok) {
-          const data = await response.json();
-          console.log('Upload successful:', data);
-          
-          const newSong: Song = {
-            id: data.filename,
-            name: data.metadata.title,
-            bpm: data.metadata.bpm || 0,
-            key: data.metadata.key || 'Unknown',
-            file,
-          };
-          setSongs((prev) => [...prev, newSong]);
-          
-          // Show success message
-          alert(`✅ Successfully uploaded: ${file.name}`);
-        } else {
-          const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
-          console.error('Upload failed:', response.status, errorData);
-          alert(`❌ Upload failed for ${file.name}: ${errorData.detail || response.statusText}`);
-        }
+        console.log('✅ Supabase upload complete. URL:', uploadResult.url);
+
+        // Add to local state
+        const newSong: Song = {
+          id: uploadResult.filename,
+          name: uploadResult.filename.replace('.mp3', ''),
+          bpm: 0,
+          key: 'Unknown',
+          file, // Keep File object for backward compatibility
+          url: uploadResult.url, // Store Supabase URL
+        };
+        setSongs((prev) => [...prev, newSong]);
+
+        alert(`✅ Successfully uploaded: ${file.name}`);
       } catch (error) {
-        console.error('Upload error:', error);
-        alert(`❌ Network error uploading ${file.name}: ${error}`);
+        console.error('❌ Upload error:', error);
+        alert(`❌ Upload failed for ${file.name}: ${error}`);
       }
     }
 
-    // Reload song list after all uploads complete
-    console.log('Reloading song list...');
+    console.log('✅ All uploads complete');
+
     try {
       const response = await fetch(`${API_BASE_URL}/api/songs`);
       if (response.ok) {
@@ -514,13 +522,13 @@ export default function HomePage() {
     async function loadSongs() {
       try {
         const response = await fetch(`${API_BASE_URL}/api/songs`);
-        
+
         if (!response.ok) {
           console.error('Failed to fetch songs:', response.status);
           setSongs([]);
           return;
         }
-        
+
         const data = await response.json();
 
         // Safety check - ensure data.songs exists and is an array
@@ -841,505 +849,505 @@ export default function HomePage() {
         {/* View Switching */}
         {activeTab === 'remix' && (
           <>
-          <div style={{
-            display: 'flex',
-            flexDirection: isMobile ? 'column' : 'row',
-            flex: 1,
-            gap: isMobile ? '12px' : '20px',
-            minHeight: isMobile ? 'auto' : '500px',
-            paddingBottom: currentPlayingSong ? (isMobile ? '100px' : '80px') : '0',
-            transition: 'padding-bottom 0.3s ease',
-            position: 'relative',
-          }}>
-            {/* Mobile Library Overlay */}
-            {isMobile && showMobileLibrary && (
-              <div
-                style={{
-                  position: 'fixed',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  background: 'rgba(0, 0, 0, 0.6)',
-                  zIndex: 200,
-                }}
-                onClick={() => setShowMobileLibrary(false)}
-              />
-            )}
-
-            {/* LEFT PANEL - Enhanced Music Library */}
             <div style={{
-              width: isMobile ? (showMobileLibrary ? '85%' : '0') : 'clamp(280px, 28%, 400px)',
-              maxWidth: isMobile ? '320px' : 'none',
               display: 'flex',
-              flexDirection: 'column',
-              padding: isMobile && !showMobileLibrary ? '0' : '20px',
-              background: 'rgba(20, 20, 30, 0.4)',
-              backdropFilter: 'blur(16px) saturate(180%)',
-              WebkitBackdropFilter: 'blur(16px) saturate(180%)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              borderRadius: '20px',
-              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.1)',
-              overflow: isMobile && !showMobileLibrary ? 'hidden' : 'visible',
-              transition: 'all 0.3s ease',
-              opacity: isRemixing ? 0.7 : 1,
-              position: isMobile ? 'fixed' : 'relative',
-              left: isMobile ? (showMobileLibrary ? '0' : '-100%') : 'auto',
-              top: isMobile ? '60px' : 'auto',
-              bottom: isMobile ? '0' : 'auto',
-              zIndex: isMobile ? 201 : 'auto',
-              height: isMobile ? 'calc(100vh - 60px)' : 'auto',
-            }}>
-              {/* Header with Search */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                <h2 style={{ margin: 0, fontSize: isMobile ? '16px' : '18px', fontWeight: '600', whiteSpace: 'nowrap', color: 'var(--accent)' }}>Stack</h2>
-                {isMobile && (
-                  <button
-                    onClick={() => setShowMobileLibrary(false)}
-                    style={{
-                      marginLeft: 'auto',
-                      padding: '8px',
-                      background: 'transparent',
-                      border: 'none',
-                      color: '#888',
-                      cursor: 'pointer',
-                      fontSize: '20px',
-                    }}
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-              <div style={{
-                position: 'relative',
-                display: 'flex',
-                alignItems: 'center',
-                marginBottom: '10px',
-              }}>
-                <input
-                  type="text"
-                  placeholder="Search..."
-                  value={librarySearchQuery}
-                  onChange={(e) => setLibrarySearchQuery(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '6px 12px 6px 32px',
-                    background: 'rgba(255, 255, 255, 0.08)',
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
-                    borderRadius: '8px',
-                    color: '#e0e0e0',
-                    fontSize: '13px',
-                    outline: 'none',
-                    transition: 'all 0.2s ease',
-                  }}
-                  onFocus={(e) => {
-                    e.currentTarget.style.border = '1px solid var(--accent-border)';
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)';
-                  }}
-                  onBlur={(e) => {
-                    e.currentTarget.style.border = '1px solid rgba(255, 255, 255, 0.15)';
-                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
-                  }}
-                />
-                <svg
-                  style={{
-                    position: 'absolute',
-                    left: '10px',
-                    width: '14px',
-                    height: '14px',
-                    color: '#888',
-                    pointerEvents: 'none',
-                  }}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-              </div>
-
-              <AIBot state={botState} isPlaying={isAudioPlaying} progressPercent={progressPercent} />
-
-              <MusicLibrary
-                songs={songs.filter(song =>
-                  librarySearchQuery === '' ||
-                  song.name.toLowerCase().includes(librarySearchQuery.toLowerCase()) ||
-                  song.key.toLowerCase().includes(librarySearchQuery.toLowerCase()) ||
-                  song.bpm.toString().includes(librarySearchQuery)
-                )}
-                selectedSongIds={selectedSongIds}
-                onToggleSelection={toggleSongSelection}
-                onFileUpload={handleFileUpload}
-                onDelete={handleDelete}
-                onRename={handleRename}
-                onDownload={handleDownload}
-                onReorder={handleReorder}
-onPlay={(song) => handlePlaySong(song)}
-              />
-            </div>
-
-            {/* MAIN PANEL - Glassmorphism */}
-            <div style={{
+              flexDirection: isMobile ? 'column' : 'row',
               flex: 1,
-              padding: isMobile ? '16px' : '20px',
-              display: 'flex',
-              flexDirection: 'column',
+              gap: isMobile ? '12px' : '20px',
+              minHeight: isMobile ? 'auto' : '500px',
+              paddingBottom: currentPlayingSong ? (isMobile ? '100px' : '80px') : '0',
+              transition: 'padding-bottom 0.3s ease',
               position: 'relative',
-              background: 'rgba(20, 20, 30, 0.4)',
-              backdropFilter: 'blur(16px) saturate(180%)',
-              WebkitBackdropFilter: 'blur(16px) saturate(180%)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              borderRadius: isMobile ? '16px' : '20px',
-              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.1)',
-              overflow: 'auto',
-              minWidth: 0,
-              minHeight: isMobile ? '0' : 'auto',
             }}>
-              {/* EnergyWave removed for cleaner look */}
-
-              <h2 style={{ margin: '0 0 12px 0', fontSize: isMobile ? '16px' : '18px', position: 'relative', zIndex: 2, fontWeight: '600', color: 'var(--accent)' }}>
-                Studio
-              </h2>
-
-              {/* Natural Language Input Section */}
-              <div style={{ marginBottom: isMobile ? '15px' : '20px', position: 'relative', zIndex: 2 }}>
-                <label style={{ display: 'block', marginBottom: '6px', fontSize: isMobile ? '13px' : '14px', color: '#ccc', fontWeight: '500' }}>
-                  Describe your vibe:
-                </label>
-                <textarea
-                  value={occasionPrompt}
-                  onChange={(e) => setOccasionPrompt(e.target.value)}
-                  placeholder={isMobile ? "e.g., 'Beach party with tropical vibes'" : "e.g., 'Create me a mix for a beach party with tropical vibes' or 'Chill Sunday morning brunch mix with smooth transitions'"}
-                  disabled={isRemixing}
+              {/* Mobile Library Overlay */}
+              {isMobile && showMobileLibrary && (
+                <div
                   style={{
-                    width: '100%',
-                    minHeight: isMobile ? '60px' : '80px',
-                    padding: isMobile ? '12px' : '14px 16px',
-                    background: 'rgba(255, 255, 255, 0.05)',
-                    border: occasionPrompt.length > 0 ? '1px solid var(--accent-border)' : '1px solid rgba(255, 255, 255, 0.15)',
-                    borderRadius: '12px',
-                    color: '#e0e0e0',
-                    fontSize: isMobile ? '14px' : '14px',
-                    resize: 'vertical',
-                    transition: 'all 0.3s ease',
-                    boxShadow: occasionPrompt.length > 0 ? '0 0 20px var(--accent-glow)' : 'none',
-                    fontFamily: 'inherit',
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(0, 0, 0, 0.6)',
+                    zIndex: 200,
                   }}
+                  onClick={() => setShowMobileLibrary(false)}
                 />
-              </div>
+              )}
 
-              {/* Remix Title Input */}
-              {selectedSongs.length > 0 && (
-                <div style={{ marginBottom: '15px', position: 'relative', zIndex: 2 }}>
-                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#aaa', fontWeight: '500' }}>
-                    Remix Name:
-                  </label>
+              {/* LEFT PANEL - Enhanced Music Library */}
+              <div style={{
+                width: isMobile ? (showMobileLibrary ? '85%' : '0') : 'clamp(280px, 28%, 400px)',
+                maxWidth: isMobile ? '320px' : 'none',
+                display: 'flex',
+                flexDirection: 'column',
+                padding: isMobile && !showMobileLibrary ? '0' : '20px',
+                background: 'rgba(20, 20, 30, 0.4)',
+                backdropFilter: 'blur(16px) saturate(180%)',
+                WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '20px',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.1)',
+                overflow: isMobile && !showMobileLibrary ? 'hidden' : 'visible',
+                transition: 'all 0.3s ease',
+                opacity: isRemixing ? 0.7 : 1,
+                position: isMobile ? 'fixed' : 'relative',
+                left: isMobile ? (showMobileLibrary ? '0' : '-100%') : 'auto',
+                top: isMobile ? '60px' : 'auto',
+                bottom: isMobile ? '0' : 'auto',
+                zIndex: isMobile ? 201 : 'auto',
+                height: isMobile ? 'calc(100vh - 60px)' : 'auto',
+              }}>
+                {/* Header with Search */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                  <h2 style={{ margin: 0, fontSize: isMobile ? '16px' : '18px', fontWeight: '600', whiteSpace: 'nowrap', color: 'var(--accent)' }}>Stack</h2>
+                  {isMobile && (
+                    <button
+                      onClick={() => setShowMobileLibrary(false)}
+                      style={{
+                        marginLeft: 'auto',
+                        padding: '8px',
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#888',
+                        cursor: 'pointer',
+                        fontSize: '20px',
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                <div style={{
+                  position: 'relative',
+                  display: 'flex',
+                  alignItems: 'center',
+                  marginBottom: '10px',
+                }}>
                   <input
                     type="text"
-                    value={hasEditedTitle ? remixTitle : `Remix ${remixCounter}`}
-                    onChange={(e) => {
-                      setRemixTitle(e.target.value);
-                      setHasEditedTitle(true);
+                    placeholder="Search..."
+                    value={librarySearchQuery}
+                    onChange={(e) => setLibrarySearchQuery(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '6px 12px 6px 32px',
+                      background: 'rgba(255, 255, 255, 0.08)',
+                      border: '1px solid rgba(255, 255, 255, 0.15)',
+                      borderRadius: '8px',
+                      color: '#e0e0e0',
+                      fontSize: '13px',
+                      outline: 'none',
+                      transition: 'all 0.2s ease',
                     }}
-                    onFocus={() => {
-                      if (!hasEditedTitle) {
-                        setRemixTitle(`Remix ${remixCounter}`);
-                      }
+                    onFocus={(e) => {
+                      e.currentTarget.style.border = '1px solid var(--accent-border)';
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.12)';
                     }}
-                    placeholder={`Remix ${remixCounter}`}
+                    onBlur={(e) => {
+                      e.currentTarget.style.border = '1px solid rgba(255, 255, 255, 0.15)';
+                      e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                    }}
+                  />
+                  <svg
+                    style={{
+                      position: 'absolute',
+                      left: '10px',
+                      width: '14px',
+                      height: '14px',
+                      color: '#888',
+                      pointerEvents: 'none',
+                    }}
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </div>
+
+                <AIBot state={botState} isPlaying={isAudioPlaying} progressPercent={progressPercent} />
+
+                <MusicLibrary
+                  songs={songs.filter(song =>
+                    librarySearchQuery === '' ||
+                    song.name.toLowerCase().includes(librarySearchQuery.toLowerCase()) ||
+                    song.key.toLowerCase().includes(librarySearchQuery.toLowerCase()) ||
+                    song.bpm.toString().includes(librarySearchQuery)
+                  )}
+                  selectedSongIds={selectedSongIds}
+                  onToggleSelection={toggleSongSelection}
+                  onFileUpload={handleFileUpload}
+                  onDelete={handleDelete}
+                  onRename={handleRename}
+                  onDownload={handleDownload}
+                  onReorder={handleReorder}
+                  onPlay={(song) => handlePlaySong(song)}
+                />
+              </div>
+
+              {/* MAIN PANEL - Glassmorphism */}
+              <div style={{
+                flex: 1,
+                padding: isMobile ? '16px' : '20px',
+                display: 'flex',
+                flexDirection: 'column',
+                position: 'relative',
+                background: 'rgba(20, 20, 30, 0.4)',
+                backdropFilter: 'blur(16px) saturate(180%)',
+                WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: isMobile ? '16px' : '20px',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.1)',
+                overflow: 'auto',
+                minWidth: 0,
+                minHeight: isMobile ? '0' : 'auto',
+              }}>
+                {/* EnergyWave removed for cleaner look */}
+
+                <h2 style={{ margin: '0 0 12px 0', fontSize: isMobile ? '16px' : '18px', position: 'relative', zIndex: 2, fontWeight: '600', color: 'var(--accent)' }}>
+                  Studio
+                </h2>
+
+                {/* Natural Language Input Section */}
+                <div style={{ marginBottom: isMobile ? '15px' : '20px', position: 'relative', zIndex: 2 }}>
+                  <label style={{ display: 'block', marginBottom: '6px', fontSize: isMobile ? '13px' : '14px', color: '#ccc', fontWeight: '500' }}>
+                    Describe your vibe:
+                  </label>
+                  <textarea
+                    value={occasionPrompt}
+                    onChange={(e) => setOccasionPrompt(e.target.value)}
+                    placeholder={isMobile ? "e.g., 'Beach party with tropical vibes'" : "e.g., 'Create me a mix for a beach party with tropical vibes' or 'Chill Sunday morning brunch mix with smooth transitions'"}
                     disabled={isRemixing}
                     style={{
                       width: '100%',
-                      padding: '12px 16px',
+                      minHeight: isMobile ? '60px' : '80px',
+                      padding: isMobile ? '12px' : '14px 16px',
                       background: 'rgba(255, 255, 255, 0.05)',
-                      border: '1px solid rgba(168, 85, 247, 0.3)',
-                      borderRadius: '10px',
+                      border: occasionPrompt.length > 0 ? '1px solid var(--accent-border)' : '1px solid rgba(255, 255, 255, 0.15)',
+                      borderRadius: '12px',
                       color: '#e0e0e0',
-                      fontSize: '16px',
-                      fontWeight: '600',
+                      fontSize: isMobile ? '14px' : '14px',
+                      resize: 'vertical',
                       transition: 'all 0.3s ease',
-                      boxShadow: '0 0 15px rgba(168, 85, 247, 0.15)',
+                      boxShadow: occasionPrompt.length > 0 ? '0 0 20px var(--accent-glow)' : 'none',
+                      fontFamily: 'inherit',
                     }}
                   />
                 </div>
-              )}
 
-              {/* Selected Songs Display with Sound Strings */}
-              <div style={{ marginBottom: '15px', position: 'relative', zIndex: 2 }}>
-                <h3 style={{ fontSize: '13px', marginBottom: '10px', color: '#aaa', fontWeight: '500' }}>
-                  Selected Songs ({selectedSongs.length}):
-                </h3>
-                <div style={{
-                  position: 'relative',
-                  minHeight: selectedSongs.length > 0 ? '160px' : '60px',
-                  padding: '10px',
-                  background: selectedSongs.length > 0 ? 'rgba(0, 0, 0, 0.2)' : 'transparent',
-                  borderRadius: '16px',
-                  overflow: 'hidden',
-                }}>
-                  {/* Animated Sound Strings Background */}
-                  {selectedSongs.length > 0 && (
-                    <SoundStrings
-                      songCount={selectedSongs.length}
-                      isRemixing={isRemixing}
-                      progressPercent={progressPercent}
-                      stage={isRemixing ? (botState === 'analyzing' ? 'analyzing' : botState === 'rendering' ? 'rendering' : 'mixing') : 'idle'}
+                {/* Remix Title Input */}
+                {selectedSongs.length > 0 && (
+                  <div style={{ marginBottom: '15px', position: 'relative', zIndex: 2 }}>
+                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#aaa', fontWeight: '500' }}>
+                      Remix Name:
+                    </label>
+                    <input
+                      type="text"
+                      value={hasEditedTitle ? remixTitle : `Remix ${remixCounter}`}
+                      onChange={(e) => {
+                        setRemixTitle(e.target.value);
+                        setHasEditedTitle(true);
+                      }}
+                      onFocus={() => {
+                        if (!hasEditedTitle) {
+                          setRemixTitle(`Remix ${remixCounter}`);
+                        }
+                      }}
+                      placeholder={`Remix ${remixCounter}`}
+                      disabled={isRemixing}
+                      style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        background: 'rgba(255, 255, 255, 0.05)',
+                        border: '1px solid rgba(168, 85, 247, 0.3)',
+                        borderRadius: '10px',
+                        color: '#e0e0e0',
+                        fontSize: '16px',
+                        fontWeight: '600',
+                        transition: 'all 0.3s ease',
+                        boxShadow: '0 0 15px rgba(168, 85, 247, 0.15)',
+                      }}
                     />
-                  )}
+                  </div>
+                )}
 
-                  {/* Song Cards Grid */}
+                {/* Selected Songs Display with Sound Strings */}
+                <div style={{ marginBottom: '15px', position: 'relative', zIndex: 2 }}>
+                  <h3 style={{ fontSize: '13px', marginBottom: '10px', color: '#aaa', fontWeight: '500' }}>
+                    Selected Songs ({selectedSongs.length}):
+                  </h3>
                   <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-                    gap: '10px',
                     position: 'relative',
-                    zIndex: 1,
+                    minHeight: selectedSongs.length > 0 ? '160px' : '60px',
+                    padding: '10px',
+                    background: selectedSongs.length > 0 ? 'rgba(0, 0, 0, 0.2)' : 'transparent',
+                    borderRadius: '16px',
+                    overflow: 'hidden',
                   }}>
-                    {selectedSongs.map((song, idx) => (
-                      <div
-                        key={song.id}
-                        style={{
-                          aspectRatio: '1',
-                          background: 'rgba(20, 20, 30, 0.8)',
-                          border: '1px solid rgba(255, 255, 255, 0.2)',
-                          borderRadius: '12px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          padding: '10px',
-                          textAlign: 'center',
+                    {/* Animated Sound Strings Background */}
+                    {selectedSongs.length > 0 && (
+                      <SoundStrings
+                        songCount={selectedSongs.length}
+                        isRemixing={isRemixing}
+                        progressPercent={progressPercent}
+                        stage={isRemixing ? (botState === 'analyzing' ? 'analyzing' : botState === 'rendering' ? 'rendering' : 'mixing') : 'idle'}
+                      />
+                    )}
+
+                    {/* Song Cards Grid */}
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+                      gap: '10px',
+                      position: 'relative',
+                      zIndex: 1,
+                    }}>
+                      {selectedSongs.map((song, idx) => (
+                        <div
+                          key={song.id}
+                          style={{
+                            aspectRatio: '1',
+                            background: 'rgba(20, 20, 30, 0.8)',
+                            border: '1px solid rgba(255, 255, 255, 0.2)',
+                            borderRadius: '12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '10px',
+                            textAlign: 'center',
+                            position: 'relative',
+                            zIndex: 3,
+                            boxShadow: isRemixing ? `0 0 20px var(--accent-glow)` : 'none',
+                            transition: 'all 0.5s ease',
+                            animation: isRemixing ? `pulse 2s ease-in-out infinite ${idx * 0.2}s` : 'none',
+                            fontSize: '12px',
+                            fontWeight: '500',
+                          }}
+                        >
+                          {song.name}
+                        </div>
+                      ))}
+                      {selectedSongs.length === 0 && (
+                        <div style={{
+                          color: 'var(--accent)',
                           position: 'relative',
                           zIndex: 3,
-                          boxShadow: isRemixing ? `0 0 20px var(--accent-glow)` : 'none',
-                          transition: 'all 0.5s ease',
-                          animation: isRemixing ? `pulse 2s ease-in-out infinite ${idx * 0.2}s` : 'none',
-                          fontSize: '12px',
-                          fontWeight: '500',
-                        }}
-                      >
-                        {song.name}
-                      </div>
-                    ))}
-                    {selectedSongs.length === 0 && (
-                      <div style={{
-                        color: 'var(--accent)',
-                        position: 'relative',
-                        zIndex: 3,
-                        fontSize: '13px',
-                        padding: '20px',
-                        animation: 'purplePulse 2s ease-in-out infinite',
-                      }}>
-                        Select your stack to vibe
-                      </div>
-                    )}
+                          fontSize: '13px',
+                          padding: '20px',
+                          animation: 'purplePulse 2s ease-in-out infinite',
+                        }}>
+                          Select your stack to vibe
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? '10px' : '12px', marginBottom: '15px', position: 'relative', zIndex: 2 }}>
-                {/* Generate Playlist Button */}
-                <button
-                  onClick={handleGeneratePlaylist}
-                  disabled={!occasionPrompt.trim() || isRemixing}
-                  style={{
-                    flex: 1,
-                    padding: isMobile ? '14px 20px' : '14px 28px',
-                    background: !occasionPrompt.trim() || isRemixing
-                      ? 'rgba(100, 100, 100, 0.3)'
-                      : 'var(--accent)',
-                    color: !occasionPrompt.trim() || isRemixing ? '#666' : '#fff',
-                    border: '1px solid rgba(255, 255, 255, 0.2)',
-                    borderRadius: '12px',
-                    cursor: !occasionPrompt.trim() || isRemixing ? 'not-allowed' : 'pointer',
-                    fontSize: isMobile ? '13px' : '14px',
-                    fontWeight: '700',
-                    transition: 'all 0.3s ease',
-                    boxShadow: occasionPrompt.trim() && !isRemixing
-                      ? '0 4px 20px var(--accent-glow)'
-                      : 'none',
-                    textTransform: 'uppercase',
-                    letterSpacing: isMobile ? '0.5px' : '1px',
-                  }}
-                >
-                  {workflowState === 'generating-playlist' ? '✨ GENERATING...' : (isMobile ? '✨ GENERATE' : '✨ GENERATE PLAYLIST')}
-                </button>
-
-                {/* Quick Remix Button (if songs selected) */}
-                {selectedSongs.length > 0 && (
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? '10px' : '12px', marginBottom: '15px', position: 'relative', zIndex: 2 }}>
+                  {/* Generate Playlist Button */}
                   <button
-                    onClick={handleRemix}
-                    disabled={isRemixing}
+                    onClick={handleGeneratePlaylist}
+                    disabled={!occasionPrompt.trim() || isRemixing}
                     style={{
+                      flex: 1,
                       padding: isMobile ? '14px 20px' : '14px 28px',
-                      background: isRemixing
+                      background: !occasionPrompt.trim() || isRemixing
                         ? 'rgba(100, 100, 100, 0.3)'
-                        : 'rgba(74, 222, 128, 0.2)',
-                      color: isRemixing ? '#666' : '#4ade80',
-                      border: '1px solid rgba(74, 222, 128, 0.4)',
+                        : 'var(--accent)',
+                      color: !occasionPrompt.trim() || isRemixing ? '#666' : '#fff',
+                      border: '1px solid rgba(255, 255, 255, 0.2)',
                       borderRadius: '12px',
-                      cursor: isRemixing ? 'not-allowed' : 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '600',
+                      cursor: !occasionPrompt.trim() || isRemixing ? 'not-allowed' : 'pointer',
+                      fontSize: isMobile ? '13px' : '14px',
+                      fontWeight: '700',
                       transition: 'all 0.3s ease',
+                      boxShadow: occasionPrompt.trim() && !isRemixing
+                        ? '0 4px 20px var(--accent-glow)'
+                        : 'none',
+                      textTransform: 'uppercase',
+                      letterSpacing: isMobile ? '0.5px' : '1px',
                     }}
                   >
-                    QUICK MIX
+                    {workflowState === 'generating-playlist' ? '✨ GENERATING...' : (isMobile ? '✨ GENERATE' : '✨ GENERATE PLAYLIST')}
                   </button>
-                )}
-              </div>
 
-              {/* Pipeline Progress with Pause/Cancel */}
-              {isRemixing && (
-                <div style={{ marginTop: '15px', position: 'relative', zIndex: 2 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                    <h3 style={{ fontSize: '15px', fontWeight: '600', margin: 0 }}>Pipeline Progress</h3>
-
-                    {/* Pause/Cancel Controls */}
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button
-                        onClick={isPaused ? handleResumeMix : handlePauseMix}
-                        style={{
-                          padding: '8px 16px',
-                          background: isPaused ? 'rgba(74, 222, 128, 0.2)' : 'rgba(251, 191, 36, 0.2)',
-                          color: isPaused ? '#4ade80' : '#fbbf24',
-                          border: `1px solid ${isPaused ? 'rgba(74, 222, 128, 0.4)' : 'rgba(251, 191, 36, 0.4)'}`,
-                          borderRadius: '8px',
-                          cursor: 'pointer',
-                          fontSize: '12px',
-                          fontWeight: '600',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          transition: 'all 0.2s ease',
-                        }}
-                      >
-                        {isPaused ? '▶ RESUME' : '⏸ PAUSE'}
-                      </button>
-                      <button
-                        onClick={handleCancelMix}
-                        style={{
-                          padding: '8px 16px',
-                          background: 'rgba(239, 68, 68, 0.2)',
-                          color: '#ef4444',
-                          border: '1px solid rgba(239, 68, 68, 0.4)',
-                          borderRadius: '8px',
-                          cursor: 'pointer',
-                          fontSize: '12px',
-                          fontWeight: '600',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          transition: 'all 0.2s ease',
-                        }}
-                      >
-                        ✕ CANCEL
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Paused indicator */}
-                  {isPaused && (
-                    <div style={{
-                      padding: '10px 16px',
-                      marginBottom: '12px',
-                      background: 'rgba(251, 191, 36, 0.1)',
-                      border: '1px solid rgba(251, 191, 36, 0.3)',
-                      borderRadius: '8px',
-                      color: '#fbbf24',
-                      fontSize: '13px',
-                      fontWeight: '500',
-                      textAlign: 'center',
-                    }}>
-                      ⏸ Mix generation is paused
-                    </div>
+                  {/* Quick Remix Button (if songs selected) */}
+                  {selectedSongs.length > 0 && (
+                    <button
+                      onClick={handleRemix}
+                      disabled={isRemixing}
+                      style={{
+                        padding: isMobile ? '14px 20px' : '14px 28px',
+                        background: isRemixing
+                          ? 'rgba(100, 100, 100, 0.3)'
+                          : 'rgba(74, 222, 128, 0.2)',
+                        color: isRemixing ? '#666' : '#4ade80',
+                        border: '1px solid rgba(74, 222, 128, 0.4)',
+                        borderRadius: '12px',
+                        cursor: isRemixing ? 'not-allowed' : 'pointer',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        transition: 'all 0.3s ease',
+                      }}
+                    >
+                      QUICK MIX
+                    </button>
                   )}
+                </div>
 
-                  <div style={{ marginBottom: '15px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                      <div style={{ fontSize: '11px', color: '#aaa' }}>
-                        {Math.round(progressPercent)}%
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#888' }}>
-                        {stages.find(s => s.status === 'running')?.name || 'Starting...'}
+                {/* Pipeline Progress with Pause/Cancel */}
+                {isRemixing && (
+                  <div style={{ marginTop: '15px', position: 'relative', zIndex: 2 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                      <h3 style={{ fontSize: '15px', fontWeight: '600', margin: 0 }}>Pipeline Progress</h3>
+
+                      {/* Pause/Cancel Controls */}
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          onClick={isPaused ? handleResumeMix : handlePauseMix}
+                          style={{
+                            padding: '8px 16px',
+                            background: isPaused ? 'rgba(74, 222, 128, 0.2)' : 'rgba(251, 191, 36, 0.2)',
+                            color: isPaused ? '#4ade80' : '#fbbf24',
+                            border: `1px solid ${isPaused ? 'rgba(74, 222, 128, 0.4)' : 'rgba(251, 191, 36, 0.4)'}`,
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            fontWeight: '600',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            transition: 'all 0.2s ease',
+                          }}
+                        >
+                          {isPaused ? '▶ RESUME' : '⏸ PAUSE'}
+                        </button>
+                        <button
+                          onClick={handleCancelMix}
+                          style={{
+                            padding: '8px 16px',
+                            background: 'rgba(239, 68, 68, 0.2)',
+                            color: '#ef4444',
+                            border: '1px solid rgba(239, 68, 68, 0.4)',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            fontWeight: '600',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            transition: 'all 0.2s ease',
+                          }}
+                        >
+                          ✕ CANCEL
+                        </button>
                       </div>
                     </div>
-                    <div style={{
-                      height: '8px',
-                      background: 'rgba(255, 255, 255, 0.1)',
-                      borderRadius: '4px',
-                      overflow: 'hidden',
-                      position: 'relative',
-                    }}>
+
+                    {/* Paused indicator */}
+                    {isPaused && (
                       <div style={{
-                        height: '100%',
-                        width: `${progressPercent}%`,
-                        background: isPaused
-                          ? 'linear-gradient(90deg, #fbbf24, #f59e0b)'
-                          : getBlendedGradient(selectedSongs.length),
-                        transition: 'width 0.5s ease',
-                        boxShadow: isPaused
-                          ? '0 0 15px rgba(251, 191, 36, 0.6)'
-                          : '0 0 15px var(--accent-glow)',
-                        animation: !isPaused ? 'shimmer 2s ease-in-out infinite' : 'none',
-                      }} />
-                    </div>
-                  </div>
-
-                  <div style={{ marginBottom: '15px' }}>
-                    {stages.map((stage) => (
-                      <div
-                        key={stage.number}
-                        style={{
-                          padding: '8px 12px',
-                          marginBottom: '4px',
-                          background: stage.status === 'complete'
-                            ? 'rgba(74, 222, 128, 0.15)'
-                            : stage.status === 'running'
-                              ? isPaused ? 'rgba(251, 191, 36, 0.15)' : 'var(--accent-bg)'
-                              : 'rgba(255, 255, 255, 0.03)',
-                          border: '1px solid rgba(255, 255, 255, 0.1)',
-                          borderRadius: '8px',
-                          fontSize: '12px',
-                          transition: 'all 0.5s ease',
-                          boxShadow: stage.status === 'running'
-                            ? isPaused ? '0 0 15px rgba(251, 191, 36, 0.3)' : '0 0 15px var(--accent-glow)'
-                            : 'none',
-                        }}
-                      >
-                        {stage.number}. {stage.name} - {stage.status === 'running' && isPaused ? 'paused' : stage.status}
+                        padding: '10px 16px',
+                        marginBottom: '12px',
+                        background: 'rgba(251, 191, 36, 0.1)',
+                        border: '1px solid rgba(251, 191, 36, 0.3)',
+                        borderRadius: '8px',
+                        color: '#fbbf24',
+                        fontSize: '13px',
+                        fontWeight: '500',
+                        textAlign: 'center',
+                      }}>
+                        ⏸ Mix generation is paused
                       </div>
-                    ))}
-                  </div>
+                    )}
 
-                  {logs.length > 0 && (
-                    <div style={{
-                      background: 'rgba(0, 0, 0, 0.3)',
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
-                      padding: '10px',
-                      fontSize: '10px',
-                      fontFamily: 'monospace',
-                      maxHeight: '120px',
-                      overflow: 'auto',
-                      borderRadius: '8px',
-                    }}>
-                      {logs.map((log, idx) => (
-                        <div key={idx} style={{ marginBottom: '2px', color: '#888' }}>
-                          {log}
+                    <div style={{ marginBottom: '15px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                        <div style={{ fontSize: '11px', color: '#aaa' }}>
+                          {Math.round(progressPercent)}%
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#888' }}>
+                          {stages.find(s => s.status === 'running')?.name || 'Starting...'}
+                        </div>
+                      </div>
+                      <div style={{
+                        height: '8px',
+                        background: 'rgba(255, 255, 255, 0.1)',
+                        borderRadius: '4px',
+                        overflow: 'hidden',
+                        position: 'relative',
+                      }}>
+                        <div style={{
+                          height: '100%',
+                          width: `${progressPercent}%`,
+                          background: isPaused
+                            ? 'linear-gradient(90deg, #fbbf24, #f59e0b)'
+                            : getBlendedGradient(selectedSongs.length),
+                          transition: 'width 0.5s ease',
+                          boxShadow: isPaused
+                            ? '0 0 15px rgba(251, 191, 36, 0.6)'
+                            : '0 0 15px var(--accent-glow)',
+                          animation: !isPaused ? 'shimmer 2s ease-in-out infinite' : 'none',
+                        }} />
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: '15px' }}>
+                      {stages.map((stage) => (
+                        <div
+                          key={stage.number}
+                          style={{
+                            padding: '8px 12px',
+                            marginBottom: '4px',
+                            background: stage.status === 'complete'
+                              ? 'rgba(74, 222, 128, 0.15)'
+                              : stage.status === 'running'
+                                ? isPaused ? 'rgba(251, 191, 36, 0.15)' : 'var(--accent-bg)'
+                                : 'rgba(255, 255, 255, 0.03)',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: '8px',
+                            fontSize: '12px',
+                            transition: 'all 0.5s ease',
+                            boxShadow: stage.status === 'running'
+                              ? isPaused ? '0 0 15px rgba(251, 191, 36, 0.3)' : '0 0 15px var(--accent-glow)'
+                              : 'none',
+                          }}
+                        >
+                          {stage.number}. {stage.name} - {stage.status === 'running' && isPaused ? 'paused' : stage.status}
                         </div>
                       ))}
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
 
-          {/* Disclaimer for Remix Tab - Separate at bottom */}
-          <div style={{ padding: isMobile ? '0 12px 12px' : '0 20px 20px' }}>
-            <Disclaimer />
-          </div>
-        </>
+                    {logs.length > 0 && (
+                      <div style={{
+                        background: 'rgba(0, 0, 0, 0.3)',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
+                        padding: '10px',
+                        fontSize: '10px',
+                        fontFamily: 'monospace',
+                        maxHeight: '120px',
+                        overflow: 'auto',
+                        borderRadius: '8px',
+                      }}>
+                        {logs.map((log, idx) => (
+                          <div key={idx} style={{ marginBottom: '2px', color: '#888' }}>
+                            {log}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Disclaimer for Remix Tab - Separate at bottom */}
+            <div style={{ padding: isMobile ? '0 12px 12px' : '0 20px 20px' }}>
+              <Disclaimer />
+            </div>
+          </>
         )}
 
         {/* Library View */}
@@ -1361,8 +1369,8 @@ onPlay={(song) => handlePlaySong(song)}
               onRename={handleRename}
               onDownload={handleDownload}
               onReorder={handleReorder}
-onPlay={(song) => handlePlaySong(song)}
-/>
+              onPlay={(song) => handlePlaySong(song)}
+            />
             <Disclaimer />
           </div>
         )}

@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 # Add parent directory to path for importing existing modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.routers import songs, mix
+from backend.routers import songs, mix, upload
 from backend.services.websocket_manager import manager
 
 # Paths - detect base directory properly for both local and Render
@@ -93,6 +93,14 @@ app.mount("/static/output", StaticFiles(directory=str(OUTPUT_DIR)), name="output
 # Include routers
 app.include_router(songs.router, prefix="/api/songs", tags=["Songs"])
 app.include_router(mix.router, prefix="/api/mix", tags=["Mix Generation"])
+app.include_router(upload.router)  # Supabase Storage - POST /upload-audio
+
+print("✅ Routers registered:")
+print("   - /api/songs/* (songs)")
+print("   - /api/mix/* (mix)")
+print("   - /upload-audio (upload)")
+print("   - /api/upload/files (list)")
+print("   - /api/upload/{filename} (delete)")
 
 
 @app.get("/")
