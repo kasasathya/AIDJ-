@@ -271,24 +271,26 @@ export default function HomePage() {
 
     console.log('✅ All uploads complete');
 
+    // Reload song list from Supabase Storage
     try {
-      const response = await fetch(`${API_BASE_URL}/api/songs`);
+      const response = await fetch(`${API_BASE_URL}/api/upload/files`);
       if (response.ok) {
         const data = await response.json();
-        if (data && data.songs && Array.isArray(data.songs)) {
-          const loadedSongs: Song[] = data.songs.map((song: any) => ({
-            id: song.filename,
-            name: song.title || song.filename,
-            bpm: song.bpm || 0,
-            key: song.key || 'Unknown',
-            file: new File([], song.filename),
+        if (data && data.files && Array.isArray(data.files)) {
+          const loadedSongs: Song[] = data.files.map((file: any) => ({
+            id: file.name,
+            name: file.name.replace('.mp3', ''),
+            bpm: 0, // Will be analyzed later
+            key: 'Unknown',
+            file: new File([], file.name),
+            url: file.url, // Supabase public URL
           }));
           setSongs(loadedSongs);
-          console.log('Song list reloaded:', loadedSongs.length, 'songs');
+          console.log('✅ Song list reloaded from Supabase:', loadedSongs.length, 'songs');
         }
       }
     } catch (error) {
-      console.error('Failed to reload songs:', error);
+      console.error('❌ Failed to reload songs:', error);
     }
   }
 
@@ -522,38 +524,40 @@ export default function HomePage() {
     }
   }
 
-  // Load songs
+  // Load songs from Supabase Storage
   useEffect(() => {
     async function loadSongs() {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/songs`);
+        const response = await fetch(`${API_BASE_URL}/api/upload/files`);
 
         if (!response.ok) {
-          console.error('Failed to fetch songs:', response.status);
+          console.error('❌ Failed to fetch songs:', response.status);
           setSongs([]);
           return;
         }
 
         const data = await response.json();
 
-        // Safety check - ensure data.songs exists and is an array
-        if (!data || !data.songs || !Array.isArray(data.songs)) {
-          console.error('Invalid songs response:', data);
+        // Safety check - ensure data.files exists and is an array
+        if (!data || !data.files || !Array.isArray(data.files)) {
+          console.error('❌ Invalid songs response:', data);
           setSongs([]);
           return;
         }
 
-        const loadedSongs: Song[] = data.songs.map((song: any) => ({
-          id: song.filename,
-          name: song.title || song.filename,
-          bpm: song.bpm || 0,
-          key: song.key || 'Unknown',
-          file: new File([], song.filename),
+        const loadedSongs: Song[] = data.files.map((file: any) => ({
+          id: file.name,
+          name: file.name.replace('.mp3', ''),
+          bpm: 0, // Will be analyzed later
+          key: 'Unknown',
+          file: new File([], file.name),
+          url: file.url, // Supabase public URL
         }));
 
         setSongs(loadedSongs);
+        console.log(`✅ Loaded ${loadedSongs.length} songs from Supabase Storage`);
       } catch (error) {
-        console.error('Failed to load songs:', error);
+        console.error('❌ Failed to load songs:', error);
         setSongs([]); // Set empty array on error
       }
     }
