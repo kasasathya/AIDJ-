@@ -170,9 +170,6 @@ async def upload_audio(file: UploadFile = File(...)):
     except Exception as e:
         print(f"⚠️ Failed to save locally (mix generation may not work): {e}")
         # Don't fail the request - Supabase upload succeeded
-            status_code=500,
-            detail=f"Upload failed: {error_message}"
-        )
     
     return UploadResponse(
         success=True,
