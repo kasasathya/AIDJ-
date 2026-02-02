@@ -222,7 +222,7 @@ export default function HomePage() {
     console.log(`Uploading ${files.length} file(s) to Supabase Storage via backend`);
 
     // Dynamic import to avoid SSR issues
-    const { uploadToSupabase, validateFile } = await import('@/lib/supabaseUpload');
+    const { uploadToSupabase } = await import('@/lib/supabaseUpload');
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -231,9 +231,14 @@ export default function HomePage() {
         console.log(`[${i + 1}/${files.length}] Processing: ${file.name}`);
 
         // Validate file (50MB max for Supabase)
-        const validation = validateFile(file, 50, ['audio/mpeg', 'audio/mp3']);
-        if (!validation.valid) {
-          alert(`❌ ${file.name}: ${validation.error}`);
+        if (!file.name.toLowerCase().endsWith('.mp3')) {
+          alert(`❌ ${file.name}: Only MP3 files are allowed`);
+          continue;
+        }
+        
+        const maxSize = 50 * 1024 * 1024; // 50MB
+        if (file.size > maxSize) {
+          alert(`❌ ${file.name}: File too large (max 50MB)`);
           continue;
         }
 
