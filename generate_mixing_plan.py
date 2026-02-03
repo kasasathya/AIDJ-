@@ -292,20 +292,34 @@ def select_tracks_in_order(basic_setlist: dict, structure_data: dict) -> list[di
     """
     all_tracks = []
     analyzed_dict = {}
+    
+    print(f"  Building analyzed_dict from structure_data...")
     for segment in structure_data.get("analyzed_setlist", []):
         for track in segment.get("analyzed_tracks", []):
             analyzed_dict[track["title"]] = track
-
-    for segment in basic_setlist.get("setlist", []):
-        for track in segment.get("tracks", []):
+            print(f"    Added to dict: {track['title']}")
+    
+    print(f"  Total tracks in analyzed_dict: {len(analyzed_dict)}")
+    
+    print(f"  Merging with basic_setlist...")
+    basic_setlist_segments = basic_setlist.get("setlist", [])
+    print(f"  Found {len(basic_setlist_segments)} segments in basic_setlist")
+    
+    for segment in basic_setlist_segments:
+        tracks_in_segment = segment.get("tracks", [])
+        print(f"    Segment '{segment.get('time', 'Unknown')}' has {len(tracks_in_segment)} tracks")
+        
+        for track in tracks_in_segment:
             title = track["title"]
+            print(f"      Looking for: {title}")
             analyzed_track = analyzed_dict.get(title)
             if analyzed_track:
                 track_copy = analyzed_track.copy()
                 track_copy["original_segment_time"] = segment.get("time", "Unknown")
                 all_tracks.append(track_copy)
+                print(f"        ✓ Matched and added")
             else:
-                print(f"Warning: '{title}' not found in structure data; skipping.")
+                print(f"        ✗ Warning: '{title}' not found in structure data; skipping.")
 
     # SORT BY BPM - lowest to highest for smooth energy progression
     all_tracks.sort(key=lambda t: t.get("bpm", 120))
@@ -326,19 +340,30 @@ def generate_mixing_plan(
     fade_duration: float = 1.0  # 1 second fade out
 ):
     try:
+        print(f"Loading basic setlist from: {basic_setlist_path}")
         basic_setlist = load_json(basic_setlist_path)
+        print(f"✓ Basic setlist loaded")
+        
+        print(f"Loading structure data from: {structure_json_path}")
         structure_data = load_json(structure_json_path)
+        print(f"✓ Structure data loaded")
 
+        print("Selecting tracks in order...")
         all_tracks = select_tracks_in_order(basic_setlist, structure_data)
+        print(f"✓ Found {len(all_tracks)} tracks")
+        
+        if not all_tracks:
+            raise ValueError("No tracks found after merging setlist and structure data! Check that songs have matching titles/files.")
 
         mixing_plan = []
         last_start_sec = 0.0
         last_track = None
 
         for idx, track in enumerate(all_tracks):
+            print(f"Processing track {idx+1}/{len(all_tracks)}: {track.get('title', 'Unknown')}")
             file_path = os.path.join(SONGS_DIR, track["file"])
             if not os.path.exists(file_path):
-                print(f"Missing: {file_path}. Skipping.")
+                print(f"  ⚠️ Missing: {file_path}. Skipping.")
                 continue
 
             try:
