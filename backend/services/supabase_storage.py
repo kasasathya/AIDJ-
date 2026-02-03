@@ -149,7 +149,8 @@ def delete_file(filename: str) -> dict:
 
 def upload_mix_file(file_data: bytes, filename: str, content_type: str = "audio/mpeg") -> dict:
     """
-    Upload a generated mix file to Supabase Storage in the mixes folder
+    Upload a generated mix file to Supabase Storage
+    Uploads to both mixes/ folder (for organization) and songs/ folder (so it appears in song list)
     
     Args:
         file_data: Raw file bytes
@@ -169,26 +170,36 @@ def upload_mix_file(file_data: bytes, filename: str, content_type: str = "audio/
         }
     
     try:
-        # Upload path: mixes/filename.mp3
-        path = f"mixes/{filename}"
+        # Upload to mixes/ folder for backup/organization
+        mixes_path = f"mixes/{filename}"
+        try:
+            client.storage.from_(AUDIO_BUCKET).upload(
+                mixes_path,
+                file_data,
+                file_options={"content-type": content_type, "upsert": True}
+            )
+            print(f"✅ Uploaded to mixes/ folder: {filename}")
+        except Exception as e:
+            print(f"⚠️ Failed to upload to mixes/ folder: {e}")
         
-        # Upload to Supabase Storage (will overwrite if exists)
-        # Note: Using file_options with upsert as boolean
+        # ALSO upload to songs/ folder so it appears in the song list
+        songs_path = f"songs/{filename}"
         result = client.storage.from_(AUDIO_BUCKET).upload(
-            path,
+            songs_path,
             file_data,
             file_options={"content-type": content_type, "upsert": True}
         )
         
-        # Get public URL
-        public_url = client.storage.from_(AUDIO_BUCKET).get_public_url(path)
+        # Get public URL from songs folder (this is what users will access)
+        public_url = client.storage.from_(AUDIO_BUCKET).get_public_url(songs_path)
         
-        print(f"✅ Uploaded mix to Supabase: {filename}")
+        print(f"✅ Uploaded mix to Supabase (songs/ folder): {filename}")
+        print(f"✅ Mix will appear in song list on reload")
         
         return {
             "success": True,
             "url": public_url,
-            "path": path,
+            "path": songs_path,
             "error": None
         }
         
@@ -198,11 +209,11 @@ def upload_mix_file(file_data: bytes, filename: str, content_type: str = "audio/
         
         # Try to get URL even if upload failed (file might exist)
         try:
-            public_url = client.storage.from_(AUDIO_BUCKET).get_public_url(f"mixes/{filename}")
+            public_url = client.storage.from_(AUDIO_BUCKET).get_public_url(f"songs/{filename}")
             return {
                 "success": True,
                 "url": public_url,
-                "path": f"mixes/{filename}",
+                "path": f"songs/{filename}",
                 "error": None,
                 "note": "Using existing file"
             }
