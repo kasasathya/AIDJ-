@@ -315,24 +315,23 @@ class PipelineRunner:
                     await self.log(f"🔗 Mix URL: {mix_url}")
                 else:
                     error_detail = result.get('error', 'Unknown error')
-                    await self.log(f"❌ Supabase upload failed: {error_detail}", "error")
+                    await self.log(f"⚠️ Supabase upload failed: {error_detail}", "warning")
                         
             except Exception as e:
-                await self.log(f"❌ Upload error: {e}", "error")
+                await self.log(f"⚠️ Upload error: {e}", "warning")
                 import traceback
                 await self.log(traceback.format_exc(), "error")
             
-            # Fail if upload didn't work
+            # If Supabase failed, use backend static URL as fallback
             if not supabase_success or not mix_url:
-                error_msg = "Mix created but Supabase upload failed. Check: 1) Supabase credentials 2) Bucket exists 3) Public read policy enabled"
-                await self.log(f"❌ {error_msg}", "error")
+                await self.log("⚠️ Supabase unavailable - using backend static URL as fallback", "warning")
                 
-                self.job.status = JobStatus.FAILED
-                self.job.error = error_msg
-                self.job.completed_at = datetime.now()
+                # Determine backend URL from environment
+                backend_url = os.environ.get('BACKEND_URL', 'https://aidj-backend.onrender.com')
+                mix_url = f"{backend_url}/static/output/mix.mp3"
                 
-                await manager.send_error(self.job.job_id, error_msg)
-                return False
+                await self.log(f"🔗 Fallback mix URL: {mix_url}")
+                await self.log("⚠️ Note: This URL may not persist after restart", "warning")
             
             # Complete
             self.job.status = JobStatus.COMPLETE
