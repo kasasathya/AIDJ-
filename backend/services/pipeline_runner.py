@@ -184,13 +184,35 @@ class PipelineRunner:
         
         # Import existing pipeline modules
         try:
+            await self.log(f"📦 Importing pipeline modules...")
+            await self.log(f"   sys.path[0]: {sys.path[0]}")
+            await self.log(f"   Current working directory: {os.getcwd()}")
+            
             from track_analysis_openai_approach import combined_engine
+            await self.log("   ✓ track_analysis_openai_approach")
+            
             from bpm_lookup import process_bpm_lookup
+            await self.log("   ✓ bpm_lookup")
+            
             from structure_detector import process_structure_detection
+            await self.log("   ✓ structure_detector")
+            
             from generate_mixing_plan import generate_mixing_plan
+            await self.log("   ✓ generate_mixing_plan")
+            
             from mixing_engine import generate_mix
+            await self.log("   ✓ mixing_engine")
+            
+            await self.log("✅ All pipeline modules imported successfully")
         except ImportError as e:
-            await self.log(f"Failed to import pipeline modules: {e}", "error")
+            await self.log(f"❌ Failed to import pipeline modules: {e}", "error")
+            import traceback
+            await self.log(traceback.format_exc(), "error")
+            
+            self.job.status = JobStatus.FAILED
+            self.job.error = f"Import failed: {str(e)}"
+            self.job.completed_at = datetime.now()
+            await manager.send_error(self.job.job_id, self.job.error)
             return False
         
         output_dir = self.base_dir / "output"
@@ -294,17 +316,49 @@ class PipelineRunner:
             await self.log("Creating final audio mix... This may take a few minutes.")
             
             mix_path = output_dir / "mix.mp3"
+            mixing_plan_path = output_dir / "mixing_plan.json"
+            structure_data_path = output_dir / "structure_data.json"
+            
+            # Verify all required files exist
+            await self.log(f"📋 Verifying input files...")
+            if not mixing_plan_path.exists():
+                error_msg = f"Mixing plan not found: {mixing_plan_path}"
+                await self.log(error_msg, "error")
+                self.job.status = JobStatus.FAILED
+                self.job.error = error_msg
+                self.job.completed_at = datetime.now()
+                await manager.send_error(self.job.job_id, error_msg)
+                return False
+            
+            if not structure_data_path.exists():
+                error_msg = f"Structure data not found: {structure_data_path}"
+                await self.log(error_msg, "error")
+                self.job.status = JobStatus.FAILED
+                self.job.error = error_msg
+                self.job.completed_at = datetime.now()
+                await manager.send_error(self.job.job_id, error_msg)
+                return False
+            
+            await self.log(f"   ✓ {mixing_plan_path.name} ({mixing_plan_path.stat().st_size} bytes)")
+            await self.log(f"   ✓ {structure_data_path.name} ({structure_data_path.stat().st_size} bytes)")
+            
+            # Verify songs directory has files
+            song_files = list(songs_dir.glob("*.mp3"))
+            await self.log(f"   ✓ Found {len(song_files)} song(s) in {songs_dir}")
+            for song_file in song_files:
+                await self.log(f"      - {song_file.name} ({song_file.stat().st_size / 1024 / 1024:.2f} MB)")
             
             # Remove old mix if exists
             if mix_path.exists():
                 mix_path.unlink()
-                await self.log("Removed old mix file")
+                await self.log("🗑️ Removed old mix file")
             
+            await self.log("🎵 Starting mix generation...")
             try:
                 await asyncio.to_thread(
                     generate_mix,
-                    mixing_plan_json=str(output_dir / "mixing_plan.json"),
-                    structure_json=str(output_dir / "structure_data.json"),
+                    mixing_plan_json=str(mixing_plan_path),
+                    structure_json=str(structure_data_path),
                     output_path=str(mix_path)
                 )
             except Exception as mix_error:
